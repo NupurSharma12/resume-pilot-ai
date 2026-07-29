@@ -1,0 +1,1 @@
+"""ResumePilot AI application package."""
