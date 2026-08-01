@@ -10,6 +10,9 @@ required to exercise this endpoint).
 from fastapi import APIRouter, Depends
 
 from app.api.v1.models.analyze_resume import AnalyzeResumeRequest, AnalyzeResumeResponse
+from app.core.config import Settings, get_settings
+from app.gateways.llm.gateway import LLMGateway
+from app.gateways.llm.gemini_gateway import GeminiGateway
 from app.gateways.llm.mock_gateway import MockGateway
 from app.parsers.resume_analysis_response_parser import ResumeAnalysisResponseParser
 from app.prompts.resume_analysis_prompt_builder import ResumeAnalysisPromptBuilder
@@ -18,27 +21,49 @@ from app.workflows.resume_analysis_workflow import ResumeAnalysisWorkflow
 router = APIRouter()
 
 
-def get_resume_analysis_workflow() -> ResumeAnalysisWorkflow:
+def get_resume_analysis_workflow(
+    settings: Settings = Depends(get_settings),
+) -> ResumeAnalysisWorkflow:
     """Construct a `ResumeAnalysisWorkflow` wired with its current dependencies.
 
     A FastAPI dependency-provider function, not a module-level singleton or
     logic inside the route handler: this is the one place that decides
     *which* prompt builder, gateway, and parser the workflow uses for this
-    endpoint. Today that's `ResumeAnalysisPromptBuilder`, `MockGateway`, and
-    `ResumeAnalysisResponseParser` — all still placeholders themselves —
-    but because this wiring lives in a single function referenced via
-    `Depends`, swapping `MockGateway` for a real provider adapter later (or
-    overriding it in tests via FastAPI's dependency-override mechanism)
-    requires changing only this function, not the route handler.
+    endpoint. `ResumeAnalysisPromptBuilder` and `ResumeAnalysisResponseParser`
+    are still fixed (they're still placeholders themselves, and this task
+    doesn't touch them), but the gateway is now selected based on
+    `settings.llm_provider`, itself obtained via `Depends(get_settings)`
+    rather than imported and called directly — keeping this function's
+    only source of configuration consistent with how the rest of the app
+    reads settings (through the cached `get_settings` dependency, not ad
+    hoc construction), and making it straightforward to override
+    `get_settings` in tests via FastAPI's dependency-override mechanism.
 
-    A new instance is constructed per call rather than reused, since all
-    three collaborators are stateless — there is no cost or correctness
-    reason to share instances across requests, and per-call construction
-    keeps this function simple.
+    `"mock"` and `"gemini"` are handled explicitly, and any other value
+    raises `ValueError` rather than silently falling back to a default
+    provider: an unrecognized `llm_provider` almost certainly means a
+    misconfigured environment, and failing loudly at request time (this
+    function is re-evaluated per request, so a bad value is never
+    latched-in past a config fix) is safer than quietly serving mock
+    responses in what was meant to be a real-provider deployment, or vice
+    versa.
+
+    A new gateway (and workflow) instance is constructed per call rather
+    than cached, since both `MockGateway` and `GeminiGateway` are cheap and
+    stateless to construct — there is no cost or correctness reason to
+    share instances across requests, and per-call construction keeps this
+    function simple.
     """
+    if settings.llm_provider == "mock":
+        gateway: LLMGateway = MockGateway()
+    elif settings.llm_provider == "gemini":
+        gateway = GeminiGateway(settings)
+    else:
+        raise ValueError(f"Unknown llm_provider: {settings.llm_provider!r}")
+
     return ResumeAnalysisWorkflow(
         prompt_builder=ResumeAnalysisPromptBuilder(),
-        gateway=MockGateway(),
+        gateway=gateway,
         response_parser=ResumeAnalysisResponseParser(),
     )
 
