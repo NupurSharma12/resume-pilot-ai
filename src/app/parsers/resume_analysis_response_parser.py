@@ -1,20 +1,20 @@
-"""First response parser: translates an `LLMResponse` into a `ResumeAnalysisResult`.
+"""Temporary response parser: exposes Gemini's raw output through the domain model.
 
-`ResumeAnalysisResponseParser` exists to prove out the seam between
-`gateways/llm/` (raw model output) and `models/` (the domain result), before
-any real extraction logic exists. It does not call an LLM and does not
-parse `response.content` in any way — it returns a fixed, hardcoded
-`ResumeAnalysisResult`, standing in for the extraction logic that will
-replace it once a real prompting/response strategy is decided.
+`ResumeAnalysisResponseParser` no longer returns a fully hardcoded result.
+It now builds a `ResumeAnalysisResult` from the real `LLMResponse` coming
+out of the gateway, but does so without any text parsing, regex, line
+splitting, or inference: `response.content` is placed, verbatim and
+unmodified, as the single element of `weaknesses`. This exists so the rest
+of the application (the API endpoint, the workflow) can be exercised
+end-to-end against a real Gemini response before a real
+extraction/scoring strategy — which would need to interpret
+`response.content` into a score and skill lists — has been designed.
 """
 
 from app.gateways.llm.models import LLMResponse
 from app.models.resume_analysis import ResumeAnalysisResult
 
-_PLACEHOLDER_SCORE = 82
-_PLACEHOLDER_MISSING_SKILLS = ["Docker", "AWS"]
-_PLACEHOLDER_STRENGTHS = ["C++", "System Design"]
-_PLACEHOLDER_WEAKNESSES = ["Limited Python experience"]
+_PLACEHOLDER_SCORE = 0
 
 
 class ResumeAnalysisResponseParser:
@@ -28,20 +28,25 @@ class ResumeAnalysisResponseParser:
     """
 
     def parse(self, response: LLMResponse) -> ResumeAnalysisResult:
-        """Return a hardcoded `ResumeAnalysisResult`, ignoring `response.content`.
+        """Wrap `response.content` in a `ResumeAnalysisResult`, unparsed.
 
-        `response` is accepted so the method's public signature matches its
-        eventual purpose (extracting a real result from real model output),
-        but its content is intentionally unused for now: no JSON parsing,
-        no text extraction, no validation against what the model actually
-        said. This keeps the parser a pure placeholder — proving that a
-        `ResumeAnalysisResult` can be produced from an `LLMResponse` at
-        all — without guessing at a response format or extraction strategy
-        that hasn't been decided yet.
+        `score` stays a fixed placeholder (`0`) and `missing_skills`/
+        `strengths` stay empty: none of those can be honestly derived from
+        raw model text without parsing it, which this parser deliberately
+        does not do. `response.content` is placed as the sole element of
+        `weaknesses` — not `strengths`, and not split across multiple
+        fields — purely because `weaknesses` is where the task asked the
+        full, unprocessed output to surface; this is not a claim that the
+        content actually describes a weakness. The entire string is kept
+        intact: no truncation, no line splitting, no regex extraction, no
+        inference about what any part of it means. This is intentionally
+        a temporary shape, meant to be replaced once real scoring/parsing
+        logic exists to turn `response.content` into an actual score and
+        skill lists.
         """
         return ResumeAnalysisResult(
             score=_PLACEHOLDER_SCORE,
-            missing_skills=list(_PLACEHOLDER_MISSING_SKILLS),
-            strengths=list(_PLACEHOLDER_STRENGTHS),
-            weaknesses=list(_PLACEHOLDER_WEAKNESSES),
+            missing_skills=[],
+            strengths=[],
+            weaknesses=[response.content],
         )
