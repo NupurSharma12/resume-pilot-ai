@@ -28,6 +28,11 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = Field(default_factory=lambda: ["*"])
 
+    gemini_api_key: str = Field(description="API key for the Gemini provider.")
+    gemini_model: str = Field(
+        default="gemini-2.5-flash", description="Default Gemini model identifier to use."
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
