@@ -1,52 +1,61 @@
-"""First application workflow: orchestrates a single LLM call.
+"""First application workflow: orchestrates a single LLM call end to end.
 
-`ResumeAnalysisWorkflow` exists to prove out the orchestration seam between
-`workflows/` and `gateways/llm/` before any real prompting, parsing, or
-scoring logic is written. It performs exactly one `LLMGateway.generate`
-call with placeholder content and hands the result back unchanged.
+`ResumeAnalysisWorkflow` composes three independently-developed
+collaborators — a prompt builder, an `LLMGateway`, and a response parser —
+into the sequence "build prompt, call gateway, parse response, return
+result." It contains no prompting or parsing logic itself; it only knows
+the *order* in which those steps happen.
 """
 
 from app.gateways.llm.gateway import LLMGateway
-from app.gateways.llm.models import LLMRequest, LLMResponse
-
-_PLACEHOLDER_MODEL = "placeholder-model"
-_PLACEHOLDER_TEMPERATURE = 0.0
-_PLACEHOLDER_SYSTEM_PROMPT = "Placeholder system prompt."
-_PLACEHOLDER_USER_PROMPT = "Placeholder resume analysis prompt."
+from app.models.resume_analysis import ResumeAnalysisResult
+from app.parsers.resume_analysis_response_parser import ResumeAnalysisResponseParser
+from app.prompts.resume_analysis_prompt_builder import ResumeAnalysisPromptBuilder
 
 
 class ResumeAnalysisWorkflow:
-    """Orchestrates resume analysis by delegating a single call to an `LLMGateway`.
+    """Orchestrates resume analysis by composing a prompt builder, gateway, and parser.
 
-    The workflow depends on an `LLMGateway` supplied by its caller
-    (constructor injection) rather than constructing one itself. This keeps
-    the workflow provider-agnostic and testable: callers can inject
-    `MockGateway` in development/tests and a real provider adapter in
-    production without changing this class. Instantiating a gateway inside
-    the workflow would hardcode a provider choice here, which belongs to
-    application wiring/composition, not orchestration logic.
+    All three collaborators are supplied by the caller (constructor
+    injection) rather than constructed here. This keeps the workflow a pure
+    orchestrator: it depends on the `ResumeAnalysisPromptBuilder` and
+    `ResumeAnalysisResponseParser` *interfaces* (in this codebase, their
+    concrete classes, since no protocol exists for them yet) and on the
+    `LLMGateway` abstraction, but owns none of their implementation
+    details. Callers can inject a `MockGateway` in development/tests and a
+    real provider adapter in production, or swap in a different prompt
+    builder or parser later, without changing this class — the same
+    rationale already applied to injecting `LLMGateway` alone before this
+    refactor.
     """
 
-    def __init__(self, gateway: LLMGateway) -> None:
-        """Store the injected gateway for use by `analyze`."""
+    def __init__(
+        self,
+        prompt_builder: ResumeAnalysisPromptBuilder,
+        gateway: LLMGateway,
+        response_parser: ResumeAnalysisResponseParser,
+    ) -> None:
+        """Store the three injected collaborators for use by `analyze`."""
+        self._prompt_builder = prompt_builder
         self._gateway = gateway
+        self._response_parser = response_parser
 
-    async def analyze(self, resume: str, job_description: str) -> LLMResponse:
-        """Run a single placeholder LLM call and return its response unchanged.
+    async def analyze(self, resume: str, job_description: str) -> ResumeAnalysisResult:
+        """Build a prompt, call the gateway, parse the response, and return the result.
 
-        `resume` and `job_description` are accepted now so the method's
-        public signature matches its eventual purpose, but their content is
-        intentionally ignored: this workflow does not yet build prompts
-        from them, parse the model's output, or score anything — it only
-        proves that a workflow can obtain a gateway via dependency
-        injection and call it. Prompt construction, parsing, and scoring
-        are deliberately left for a later change, once agents exist to own
-        that logic.
+        This method is deliberately just four steps with no branching,
+        error handling, or interpretation of `resume`/`job_description`
+        beyond passing them along: it delegates *what* a prompt looks like
+        to `ResumeAnalysisPromptBuilder` and *how* a response becomes a
+        `ResumeAnalysisResult` to `ResumeAnalysisResponseParser`. The
+        workflow itself does not know — and should not need to know — how
+        either of those collaborators does its job, only that they exist
+        and run in this order. Both collaborators are currently
+        placeholders (fixed prompt template, hardcoded result), so this
+        method's observable behavior is unchanged from before the refactor
+        aside from now returning a `ResumeAnalysisResult` instead of the
+        raw `LLMResponse`.
         """
-        request = LLMRequest(
-            system_prompt=_PLACEHOLDER_SYSTEM_PROMPT,
-            user_prompt=_PLACEHOLDER_USER_PROMPT,
-            model=_PLACEHOLDER_MODEL,
-            temperature=_PLACEHOLDER_TEMPERATURE,
-        )
-        return await self._gateway.generate(request)
+        request = self._prompt_builder.build(resume, job_description)
+        response = await self._gateway.generate(request)
+        return self._response_parser.parse(response)
