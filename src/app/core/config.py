@@ -33,6 +33,16 @@ class Settings(BaseSettings):
         default="gemini-2.5-flash", description="Default Gemini model identifier to use."
     )
 
+    llm_provider: str = Field(
+        default="mock",
+        description=(
+            "Which LLMGateway implementation to use ('mock' or 'gemini'). "
+            "Left as a plain str rather than a Literal so that an unrecognized "
+            "value surfaces as an explicit ValueError from dependency-injection "
+            "wiring, instead of a settings-load-time validation error."
+        ),
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
