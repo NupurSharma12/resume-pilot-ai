@@ -10,7 +10,6 @@ onto `google-genai`'s request/response shapes. `generate()` and
 
 import time
 from collections.abc import AsyncIterator
-from typing import cast
 
 from google import genai
 from google.genai import types
@@ -114,25 +113,42 @@ class GeminiGateway(LLMGateway):
     async def generate_structured(self, request: LLMRequest, response_model: type[T]) -> T:
         """Call Gemini's native structured output and return a `response_model` instance.
 
-        Uses `GenerateContentConfig.response_schema`/`response_mime_type`
-        (Gemini's native structured-output support, confirmed against the
-        installed `google-genai` SDK), passing `response_model` directly
-        as the schema — the SDK accepts a Pydantic model class there and
-        has the API constrain generation to match it. `request` supplies
-        `system_prompt`/`temperature`/`max_tokens` exactly as `generate`
-        does; `response_model` (the caller-supplied type parameter), not
-        `request.response_schema`, is the schema actually sent to Gemini —
-        having two possible sources of the target schema on the same call
-        would be ambiguous, so `response_model` alone is treated as
-        authoritative, mirroring how `generate` already ignores
-        `request.metadata` for lack of a use.
+        Uses `GenerateContentConfig.response_json_schema`/
+        `response_mime_type`, not `response_schema`: research into this
+        SDK (see the `additionalProperties` investigation) found that
+        `response_schema` converts a Pydantic model through Gemini's older
+        OpenAPI-3.0-subset `Schema` object, which has no slot for
+        `additionalProperties` — so any model using `extra="forbid"` (like
+        `ResumeAnalysisResult` and its nested models) fails with `400
+        INVALID_ARGUMENT: Unknown name "additional_properties"`.
+        `response_json_schema` accepts real JSON Schema, whose documented
+        supported keywords include `additionalProperties`, `$defs`, and
+        `$ref` — exactly what `response_model.model_json_schema()`
+        produces for a nested, `extra="forbid"` model. Passing
+        `response_model.model_json_schema()` (a plain `dict`) rather than
+        `response_model` itself is required: passing the raw class to
+        `response_json_schema` raises `PydanticSerializationError` when
+        the SDK tries to serialize the request, since (unlike
+        `response_schema`) `response_json_schema` performs no Pydantic
+        auto-conversion.
 
-        The parsed result comes from `response.parsed`, which the SDK
-        populates with a validated instance of `response_schema` when one
-        was supplied. `cast` is used (not re-validation) because the SDK
-        has already validated the object against `response_model` to
-        produce `.parsed`; re-validating here would just repeat work the
-        SDK already did.
+        `request` supplies `system_prompt`/`temperature`/`max_tokens`
+        exactly as `generate` does; `response_model` (the caller-supplied
+        type parameter), not `request.response_schema`, is the schema
+        actually sent to Gemini — having two possible sources of the
+        target schema on the same call would be ambiguous, so
+        `response_model` alone is treated as authoritative, mirroring how
+        `generate` already ignores `request.metadata` for lack of a use.
+
+        `response.parsed` is deliberately not used: the SDK only
+        auto-populates `.parsed` as a validated Pydantic instance when the
+        configured schema value is itself a Pydantic *class*, which
+        `response_json_schema` (a dict, per above) is not — `.parsed`
+        would just be the plain-`dict` result of `json.loads(response.text)`
+        here, not a `response_model` instance. Instead, the result is
+        validated explicitly via `response_model.model_validate_json(response.text)`,
+        which both produces the correctly-typed instance and gives the
+        same validation guarantee `.parsed` would have.
 
         Latency is measured the same way as in `generate()` — same
         `time.perf_counter()` placement around the network call — for
@@ -153,7 +169,7 @@ class GeminiGateway(LLMGateway):
             temperature=request.temperature,
             max_output_tokens=request.max_tokens,
             response_mime_type="application/json",
-            response_schema=response_model,
+            response_json_schema=response_model.model_json_schema(),
         )
 
         start = time.perf_counter()
@@ -170,7 +186,7 @@ class GeminiGateway(LLMGateway):
             latency_ms=latency_ms,
         )
 
-        return cast(response_model, response.parsed)
+        return response_model.model_validate_json(response.text)
 
     def stream(self, request: LLMRequest) -> AsyncIterator[str]:
         """Not yet implemented.
