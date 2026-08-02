@@ -155,14 +155,24 @@ class GeminiGateway(LLMGateway):
         instrumentation consistency, but since this method's return type
         is the caller's own `response_model` (not `LLMResponse`), there is
         no `latency_ms` field to embed it in; it's logged instead via the
-        module's structlog logger, so that observability parity with
-        `generate()` isn't simply lost for this method.
+        module's structlog logger, along with `usage`/`finish_reason`
+        extracted with the same `_extract_usage`/`_extract_finish_reason`
+        helpers `generate()` already uses (for consistent field meaning
+        across both methods), so observability parity with `generate()`
+        isn't simply lost for this method. When usage is unavailable,
+        `_extract_usage` returns `None` and the individual token-count
+        fields are logged as `None` (`null` in JSON) rather than `0` —
+        `0` would misrepresent "not reported" as "reported as zero."
 
-        No `try`/`except` around the call: per the requirement to "raise
-        the SDK exception directly if structured generation fails," any
-        exception from `generate_content` (network errors, the API
-        rejecting the request, schema violations) propagates to the
-        caller unmodified.
+        The network call is wrapped in a `try`/`except` whose only job is
+        to log the failure at ERROR before a bare `raise` — the exact same
+        exception still propagates to the caller unmodified, satisfying
+        "raise the SDK exception directly if structured generation
+        fails": nothing is caught-and-suppressed or caught-and-transformed,
+        only observed. `response_model.model_validate_json(...)` is
+        deliberately left unwrapped: a `pydantic.ValidationError` there is
+        logged by `ResumeAnalysisWorkflow` (the caller), not here, so the
+        failure is logged exactly once rather than at both layers.
         """
         config = types.GenerateContentConfig(
             system_instruction=request.system_prompt,
@@ -173,17 +183,36 @@ class GeminiGateway(LLMGateway):
         )
 
         start = time.perf_counter()
-        response = await self._client.aio.models.generate_content(
-            model=self._model,
-            contents=request.user_prompt,
-            config=config,
-        )
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=self._model,
+                contents=request.user_prompt,
+                config=config,
+            )
+        except Exception as exc:
+            logger.error(
+                "gemini_generate_structured_failed",
+                provider="gemini",
+                model=self._model,
+                response_model=response_model.__name__,
+                latency_ms=(time.perf_counter() - start) * 1000,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            raise
         latency_ms = (time.perf_counter() - start) * 1000
+
+        usage = self._extract_usage(response)
         logger.info(
             "gemini_generate_structured",
+            provider="gemini",
             model=self._model,
             response_model=response_model.__name__,
             latency_ms=latency_ms,
+            prompt_tokens=usage.prompt_tokens if usage else None,
+            completion_tokens=usage.completion_tokens if usage else None,
+            total_tokens=usage.total_tokens if usage else None,
+            finish_reason=self._extract_finish_reason(response),
         )
 
         return response_model.model_validate_json(response.text)

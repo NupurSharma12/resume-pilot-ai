@@ -5,7 +5,13 @@ business logic itself — it only translates between the API schema and the
 workflow's inputs/outputs, and constructs the workflow's dependencies. The
 gateway used is selected per request via `settings.llm_provider` (`"mock"`
 by default, requiring no API tokens; `"gemini"` for real calls).
+
+Logs request-level metadata (lengths, provider, elapsed time,
+success/failure) at INFO/ERROR — never resume/job-description content or
+the generated analysis; see `analyze_resume`'s docstring.
 """
+
+import time
 
 from fastapi import APIRouter, Depends
 
@@ -19,11 +25,14 @@ from app.api.v1.models.analyze_resume import (
     SkillMatchResponse,
 )
 from app.core.config import Settings, get_settings
+from app.core.logging import get_logger
 from app.gateways.llm.gateway import LLMGateway
 from app.gateways.llm.gemini_gateway import GeminiGateway
 from app.gateways.llm.mock_gateway import MockGateway
 from app.prompts.resume_analysis_prompt_builder import ResumeAnalysisPromptBuilder
 from app.workflows.resume_analysis_workflow import ResumeAnalysisWorkflow
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -70,6 +79,7 @@ def get_resume_analysis_workflow(
     elif settings.llm_provider == "gemini":
         gateway = GeminiGateway(settings)
     else:
+        logger.error("unknown_llm_provider", llm_provider=settings.llm_provider)
         raise ValueError(f"Unknown llm_provider: {settings.llm_provider!r}")
 
     return ResumeAnalysisWorkflow(
@@ -82,6 +92,7 @@ def get_resume_analysis_workflow(
 async def analyze_resume(
     payload: AnalyzeResumeRequest,
     workflow: ResumeAnalysisWorkflow = Depends(get_resume_analysis_workflow),
+    settings: Settings = Depends(get_settings),
 ) -> AnalyzeResumeResponse:
     """Analyze a resume against a job description and return the result.
 
@@ -93,10 +104,44 @@ async def analyze_resume(
     *coincidentally* identical right now, not implicitly coupled — either
     can gain, rename, or drop a field later without the other silently
     breaking.
+
+    Logs request-received and request-completed/-failed events with
+    `provider` and `elapsed_ms`. `settings` is an added dependency
+    (alongside `workflow`) purely so `settings.llm_provider` is available
+    to log — it plays no role in the response. Only `len(payload.resume)`/
+    `len(payload.job_description)` are logged, never the text itself; the
+    generated `result` is never logged either, per the no-content-logging
+    requirement. On failure, the caught exception is logged once here (a
+    request-level summary distinct from any lower-layer log of the same
+    failure — see `ResumeAnalysisWorkflow`/`GeminiGateway`) and re-raised
+    unchanged via a bare `raise`, so FastAPI's default error handling — and
+    therefore the resulting HTTP response — is completely unaffected.
     """
-    result = await workflow.analyze(
-        resume=payload.resume,
-        job_description=payload.job_description,
+    logger.info(
+        "analyze_request_received",
+        resume_length=len(payload.resume),
+        job_description_length=len(payload.job_description),
+        provider=settings.llm_provider,
+    )
+    start = time.perf_counter()
+    try:
+        result = await workflow.analyze(
+            resume=payload.resume,
+            job_description=payload.job_description,
+        )
+    except Exception as exc:
+        logger.error(
+            "analyze_request_failed",
+            provider=settings.llm_provider,
+            elapsed_ms=(time.perf_counter() - start) * 1000,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        raise
+    logger.info(
+        "analyze_request_completed",
+        provider=settings.llm_provider,
+        elapsed_ms=(time.perf_counter() - start) * 1000,
     )
     return AnalyzeResumeResponse(
         overall_assessment=OverallAssessmentResponse(
