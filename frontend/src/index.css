@@ -37,3 +37,19 @@ body {
 .animate-panel-fade {
   animation: panel-fade-in 200ms ease-out;
 }
+
+/* Indeterminate loading sweep — no real percentage to report during
+   analysis, so a looping sweep (rather than a fake determinate value)
+   honestly signals "actively working" without implying a known duration. */
+@keyframes indeterminate-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+.animate-indeterminate-sweep {
+  animation: indeterminate-sweep 1.4s ease-in-out infinite;
+}

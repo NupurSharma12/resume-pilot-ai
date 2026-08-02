@@ -10,7 +10,7 @@ import {
 import { useLocation } from 'react-router-dom'
 import Badge from './Badge'
 import CandidateSummaryCard from './CandidateSummaryCard'
-import { candidate, mockResumeAnalysis } from '../data/mockData'
+import { candidate } from '../data/mockData'
 
 const NAV_ITEMS = [
   { id: 'resume', label: 'Resume', icon: FileText },
@@ -21,7 +21,11 @@ const NAV_ITEMS = [
   { id: 'settings', label: 'Settings', icon: Settings },
 ]
 
-export default function Sidebar() {
+interface SidebarProps {
+  overallScore: number
+}
+
+export default function Sidebar({ overallScore }: SidebarProps) {
   const location = useLocation()
   const isDashboardActive = location.pathname === '/'
 
@@ -62,10 +66,7 @@ export default function Sidebar() {
       </nav>
 
       <div className="mt-auto p-4">
-        <CandidateSummaryCard
-          candidate={candidate}
-          overallScore={mockResumeAnalysis.overall_assessment.overall_score}
-        />
+        <CandidateSummaryCard candidate={candidate} overallScore={overallScore} />
       </div>
     </aside>
   )
