@@ -8,8 +8,11 @@ deterministic, clearly-fake data shaped like a real `LLMResponse`.
 """
 
 from collections.abc import AsyncIterator
+from typing import get_origin
 
-from app.gateways.llm.gateway import LLMGateway
+from pydantic import BaseModel
+
+from app.gateways.llm.gateway import LLMGateway, T
 from app.gateways.llm.models import Cost, LLMRequest, LLMResponse, TokenUsage
 
 _PROMPT_PREVIEW_LIMIT = 100
@@ -41,6 +44,51 @@ def _estimate_tokens(text: str) -> int:
     precise — precision is not the point of a mock.
     """
     return max(1, len(text) // 4)
+
+
+def _placeholder_value(annotation: object) -> object:
+    """Return a type-appropriate empty/zero value for a single field annotation.
+
+    Dispatches purely on `annotation` — never on a field's name or
+    description — so this has no way to encode domain knowledge about
+    what any particular field means. Nested `BaseModel` subclasses recurse
+    into `_build_placeholder`; `list[...]` annotations become `[]`
+    (an empty list is a valid value for every `list` field on the current
+    domain model, none of which require a minimum length); primitives get
+    their zero value; anything else falls back to `None`, which is only
+    valid for fields already typed as optional.
+    """
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return _build_placeholder(annotation)
+    if get_origin(annotation) is list:
+        return []
+    if annotation is int:
+        return 0
+    if annotation is float:
+        return 0.0
+    if annotation is str:
+        return ""
+    if annotation is bool:
+        return False
+    return None
+
+
+def _build_placeholder(model_cls: type[T]) -> T:
+    """Recursively build a validated instance of `model_cls` from type-driven placeholder values.
+
+    Iterates `model_cls.model_fields` (Pydantic's own field metadata)
+    rather than anything specific to `ResumeAnalysisResult`, so this works
+    for any Pydantic model passed as `response_model` — the whole point of
+    `generate_structured` being generic over `T`. Constructing via
+    `model_cls(**values)` (not `model_construct()`) means the result is
+    fully validated, so it's guaranteed to satisfy `frozen=True`,
+    `extra="forbid"`, and any field constraints (e.g. `ge=0, le=100`)
+    exactly like a real provider's structured output would.
+    """
+    values = {
+        name: _placeholder_value(field.annotation) for name, field in model_cls.model_fields.items()
+    }
+    return model_cls(**values)
 
 
 class MockGateway(LLMGateway):
@@ -76,26 +124,27 @@ class MockGateway(LLMGateway):
             finish_reason="stop",
         )
 
-    async def generate_structured(self, request: LLMRequest) -> LLMResponse:
-        """Return a synthetic response indicating structured generation.
+    async def generate_structured(self, request: LLMRequest, response_model: type[T]) -> T:
+        """Return a validated, generically-built placeholder instance of `response_model`.
 
-        No JSON is produced or parsed against `request.response_schema` —
-        doing so would mean interpreting the schema, which is business
-        logic outside a mock's job. The content simply names that
-        structured generation was requested, which is enough for callers
-        developing against the gateway to distinguish this path from
-        `generate` in logs and tests.
+        Matches `LLMGateway.generate_structured`'s signature exactly:
+        takes the caller's target type and returns an instance of that
+        same type, not an `LLMResponse`. Built via `_build_placeholder`,
+        which fills every field with a type-appropriate empty/zero value
+        (recursing into nested `BaseModel` fields) rather than using
+        `response_model.model_construct()`: `model_construct()` leaves
+        unsupplied required fields entirely absent from the instance, so
+        any code that reads a nested attribute (e.g.
+        `result.overall_assessment.overall_score`) hits an
+        `AttributeError` immediately — unusable for actually exercising
+        callers end-to-end. Filling in real (if trivial) values keeps the
+        mock generic and free of domain knowledge — the values are chosen
+        purely from each field's *type* (`0` for `int`, `""` for `str`,
+        `[]` for `list`, a recursively-built placeholder for a nested
+        `BaseModel`), never from what the field means — while producing
+        something callers can actually use.
         """
-        content = f"Mock structured response for: {_preview(request.user_prompt)}"
-        return LLMResponse(
-            content=content,
-            provider="mock",
-            model=request.model,
-            usage=self._mock_usage(request.user_prompt, content),
-            cost=self._mock_cost(request.user_prompt, content),
-            latency_ms=0,
-            finish_reason="stop",
-        )
+        return _build_placeholder(response_model)
 
     async def stream(self, request: LLMRequest) -> AsyncIterator[str]:
         """Yield a small, fixed sequence of content chunks.

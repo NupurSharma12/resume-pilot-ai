@@ -7,9 +7,13 @@ type-checked against `LLMGateway` structurally, without inheriting from it.
 """
 
 from collections.abc import AsyncIterator
-from typing import Protocol, runtime_checkable
+from typing import Protocol, TypeVar, runtime_checkable
+
+from pydantic import BaseModel
 
 from app.gateways.llm.models import LLMRequest, LLMResponse
+
+T = TypeVar("T", bound=BaseModel)
 
 
 @runtime_checkable
@@ -32,16 +36,26 @@ class LLMGateway(Protocol):
         """
         ...
 
-    async def generate_structured(self, request: LLMRequest) -> LLMResponse:
-        """Generate a completion constrained to `request.response_schema`.
+    async def generate_structured(self, request: LLMRequest, response_model: type[T]) -> T:
+        """Generate a completion validated against `response_model` and return an instance of it.
 
         Kept as a distinct method from `generate` (rather than an implicit
-        branch on whether `response_schema` is set) because structured
+        branch on whether a schema is requested) because structured
         output is a materially different capability per provider — some
         implement it via tool/function calling, others via native JSON
         mode — and a separate method makes that distinction explicit at
         the call site and lets adapters implement (or reject) it
         independently.
+
+        Generic over `T` (bound to `pydantic.BaseModel`) rather than
+        returning `LLMResponse`: the caller supplies the exact Pydantic
+        model class it wants back via `response_model`, and gets back an
+        instance of that same type, so the result is immediately usable
+        as a domain object (e.g. `ResumeAnalysisResult`) without a
+        separate parsing step. This is a different contract from
+        `generate`'s, which always returns provider metadata
+        (usage/cost/latency/finish_reason) alongside raw text — structured
+        output trades that envelope for a directly typed result.
         """
         ...
 
