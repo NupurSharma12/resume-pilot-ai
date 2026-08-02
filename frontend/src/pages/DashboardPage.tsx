@@ -1,22 +1,34 @@
 import { useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import TopHeader from '../components/TopHeader'
 import CandidateHeroCard from '../components/CandidateHeroCard'
 import MetricCard from '../components/MetricCard'
 import AnalysisPanel from '../components/AnalysisPanel'
+import AnalyzingState from '../components/AnalyzingState'
+import AnalysisErrorState from '../components/AnalysisErrorState'
 import TailoredResumeBanner from '../components/TailoredResumeBanner'
 import { getThemeForIndex } from '../data/theme'
-import {
-  candidate,
-  mockResumeAnalysis,
-  skillMatchNarratives,
-  defaultSkillMatchNarrative,
-} from '../data/mockData'
+import { candidate, skillMatchNarratives, defaultSkillMatchNarrative } from '../data/mockData'
+import { SAMPLE_RESUME, SAMPLE_JOB_DESCRIPTION } from '../data/sampleInput'
+import { analyzeResume, ApiError } from '../lib/api'
+import type { DashboardOutletContext } from '../layouts/DashboardLayout'
+
+type AnalysisStatus = 'idle' | 'loading' | 'success' | 'error'
 
 export default function DashboardPage() {
-  const { overall_assessment, skill_matches } = mockResumeAnalysis
+  // `resumeAnalysis` lives one level up, in DashboardLayout, and is shared
+  // via Outlet context — not local state here — so the sidebar's summary
+  // card and this page always render the same analysis, never two
+  // independently-drifting copies of it (see DashboardLayout's docstring).
+  const { resumeAnalysis, setResumeAnalysis } = useOutletContext<DashboardOutletContext>()
 
-  // No assumption of exactly five (or any fixed number of) categories:
-  // whatever `skill_matches` contains is what gets rendered and selected.
+  // Starts 'idle', looking exactly like the pre-integration mock dashboard —
+  // nothing changes on screen until a user actually triggers an analysis.
+  const [status, setStatus] = useState<AnalysisStatus>('idle')
+  const [errorMessage, setErrorMessage] = useState('')
+
+  const { overall_assessment, skill_matches } = resumeAnalysis
+
   const [selectedCategory, setSelectedCategory] = useState<string | undefined>(
     skill_matches[0]?.category,
   )
@@ -27,43 +39,70 @@ export default function DashboardPage() {
     ? (skillMatchNarratives[selectedSkillMatch.category] ?? defaultSkillMatchNarrative)
     : undefined
 
+  async function handleAnalyze() {
+    setStatus('loading')
+    try {
+      const result = await analyzeResume(SAMPLE_RESUME, SAMPLE_JOB_DESCRIPTION)
+      setResumeAnalysis(result)
+      setSelectedCategory(result.skill_matches[0]?.category)
+      setStatus('success')
+    } catch (err) {
+      setErrorMessage(
+        err instanceof ApiError ? err.message : 'An unexpected error occurred. Please try again.',
+      )
+      setStatus('error')
+    }
+  }
+
   return (
     <>
       <TopHeader
         title="Resume Analysis Dashboard"
         subtitle="AI-powered recruiter insights and hiring recommendations"
+        onAnalyze={handleAnalyze}
+        isAnalyzing={status === 'loading'}
       />
 
       <div className="space-y-8 p-8">
-        <CandidateHeroCard
-          candidate={candidate}
-          overallAssessment={overall_assessment}
-          skillMatches={skill_matches}
-        />
+        {status === 'loading' && <AnalyzingState />}
 
-        <div className="grid grid-cols-5 gap-5">
-          {skill_matches.map((skillMatch, index) => (
-            <MetricCard
-              key={skillMatch.category}
-              skillMatch={skillMatch}
-              theme={getThemeForIndex(index)}
-              recruiterSummary={
-                (skillMatchNarratives[skillMatch.category] ?? defaultSkillMatchNarrative)
-                  .recruiterSummary
-              }
-              isSelected={selectedCategory === skillMatch.category}
-              onSelect={setSelectedCategory}
+        {status === 'error' && (
+          <AnalysisErrorState message={errorMessage} onRetry={handleAnalyze} />
+        )}
+
+        {(status === 'idle' || status === 'success') && (
+          <div key={status} className="animate-panel-fade space-y-8">
+            <CandidateHeroCard
+              candidate={candidate}
+              overallAssessment={overall_assessment}
+              skillMatches={skill_matches}
             />
-          ))}
-        </div>
 
-        {selectedSkillMatch && selectedNarrative && (
-          <AnalysisPanel
-            skillMatch={selectedSkillMatch}
-            theme={getThemeForIndex(selectedIndex)}
-            aiSummary={selectedNarrative.aiSummary}
-            recommendation={selectedNarrative.recommendation}
-          />
+            <div className="grid grid-cols-5 gap-5">
+              {skill_matches.map((skillMatch, index) => (
+                <MetricCard
+                  key={skillMatch.category}
+                  skillMatch={skillMatch}
+                  theme={getThemeForIndex(index)}
+                  recruiterSummary={
+                    (skillMatchNarratives[skillMatch.category] ?? defaultSkillMatchNarrative)
+                      .recruiterSummary
+                  }
+                  isSelected={selectedCategory === skillMatch.category}
+                  onSelect={setSelectedCategory}
+                />
+              ))}
+            </div>
+
+            {selectedSkillMatch && selectedNarrative && (
+              <AnalysisPanel
+                skillMatch={selectedSkillMatch}
+                theme={getThemeForIndex(selectedIndex)}
+                aiSummary={selectedNarrative.aiSummary}
+                recommendation={selectedNarrative.recommendation}
+              />
+            )}
+          </div>
         )}
 
         <TailoredResumeBanner />
