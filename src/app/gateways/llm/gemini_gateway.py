@@ -3,21 +3,24 @@
 `GeminiGateway` is the first real (non-mock) provider adapter: it makes
 actual network calls to Google's Gemini API and is the concrete class that
 maps this project's provider-agnostic `LLMRequest`/`LLMResponse` contracts
-onto `google-genai`'s request/response shapes. Only `generate()` is
-implemented; `generate_structured()` and `stream()` are left raising
-`NotImplementedError` until a structured-output and streaming strategy is
-decided.
+onto `google-genai`'s request/response shapes. `generate()` and
+`generate_structured()` are implemented; `stream()` is left raising
+`NotImplementedError` until a streaming strategy is decided.
 """
 
 import time
 from collections.abc import AsyncIterator
+from typing import cast
 
 from google import genai
 from google.genai import types
 
 from app.core.config import Settings
-from app.gateways.llm.gateway import LLMGateway
+from app.core.logging import get_logger
+from app.gateways.llm.gateway import LLMGateway, T
 from app.gateways.llm.models import LLMRequest, LLMResponse, TokenUsage
+
+logger = get_logger(__name__)
 
 
 class GeminiGateway(LLMGateway):
@@ -108,16 +111,66 @@ class GeminiGateway(LLMGateway):
             finish_reason=self._extract_finish_reason(response),
         )
 
-    async def generate_structured(self, request: LLMRequest) -> LLMResponse:
-        """Not yet implemented.
+    async def generate_structured(self, request: LLMRequest, response_model: type[T]) -> T:
+        """Call Gemini's native structured output and return a `response_model` instance.
 
-        Gemini supports structured output via `response_schema`/
-        `response_mime_type` on `GenerateContentConfig`, but deciding how
-        `LLMRequest.response_schema` (a plain `type`) should map onto that
-        — and how to validate/parse the result — is a design decision left
-        for a dedicated change, not bundled into this first adapter.
+        Uses `GenerateContentConfig.response_schema`/`response_mime_type`
+        (Gemini's native structured-output support, confirmed against the
+        installed `google-genai` SDK), passing `response_model` directly
+        as the schema — the SDK accepts a Pydantic model class there and
+        has the API constrain generation to match it. `request` supplies
+        `system_prompt`/`temperature`/`max_tokens` exactly as `generate`
+        does; `response_model` (the caller-supplied type parameter), not
+        `request.response_schema`, is the schema actually sent to Gemini —
+        having two possible sources of the target schema on the same call
+        would be ambiguous, so `response_model` alone is treated as
+        authoritative, mirroring how `generate` already ignores
+        `request.metadata` for lack of a use.
+
+        The parsed result comes from `response.parsed`, which the SDK
+        populates with a validated instance of `response_schema` when one
+        was supplied. `cast` is used (not re-validation) because the SDK
+        has already validated the object against `response_model` to
+        produce `.parsed`; re-validating here would just repeat work the
+        SDK already did.
+
+        Latency is measured the same way as in `generate()` — same
+        `time.perf_counter()` placement around the network call — for
+        instrumentation consistency, but since this method's return type
+        is the caller's own `response_model` (not `LLMResponse`), there is
+        no `latency_ms` field to embed it in; it's logged instead via the
+        module's structlog logger, so that observability parity with
+        `generate()` isn't simply lost for this method.
+
+        No `try`/`except` around the call: per the requirement to "raise
+        the SDK exception directly if structured generation fails," any
+        exception from `generate_content` (network errors, the API
+        rejecting the request, schema violations) propagates to the
+        caller unmodified.
         """
-        raise NotImplementedError("GeminiGateway.generate_structured is not yet implemented.")
+        config = types.GenerateContentConfig(
+            system_instruction=request.system_prompt,
+            temperature=request.temperature,
+            max_output_tokens=request.max_tokens,
+            response_mime_type="application/json",
+            response_schema=response_model,
+        )
+
+        start = time.perf_counter()
+        response = await self._client.aio.models.generate_content(
+            model=self._model,
+            contents=request.user_prompt,
+            config=config,
+        )
+        latency_ms = (time.perf_counter() - start) * 1000
+        logger.info(
+            "gemini_generate_structured",
+            model=self._model,
+            response_model=response_model.__name__,
+            latency_ms=latency_ms,
+        )
+
+        return cast(response_model, response.parsed)
 
     def stream(self, request: LLMRequest) -> AsyncIterator[str]:
         """Not yet implemented.
