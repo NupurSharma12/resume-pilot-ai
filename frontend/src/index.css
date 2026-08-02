@@ -1,0 +1,39 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans:
+    'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #f7f8fa;
+  color: #111827;
+}
+
+/* Re-triggered by remounting a keyed element (e.g. the Analysis Panel when
+   the selected category changes) — CSS animations restart on remount,
+   unlike transitions, which need the element to stay mounted. */
+@keyframes panel-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-panel-fade {
+  animation: panel-fade-in 200ms ease-out;
+}
