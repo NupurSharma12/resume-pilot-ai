@@ -26,7 +26,46 @@ class LLMGateway(Protocol):
     the gateway layer decoupled from any particular provider SDK's class
     hierarchy and avoids forcing unrelated adapters (e.g. a local Ollama
     client vs. a hosted OpenAI client) into an artificial inheritance tree.
+
+    The three properties below exist for `GatewayChain` (see `chain.py`):
+    it needs to identify which provider it's talking to for logging, and
+    to know whether a provider can even attempt `generate_structured`
+    before calling it, without depending on any provider's concrete type.
+    `GatewayChain` itself also implements this Protocol (a chain of
+    gateways is itself a gateway), so workflows depend on exactly this one
+    interface regardless of whether they're handed a single provider or a
+    chain of several.
     """
+
+    @property
+    def provider_name(self) -> str:
+        """Short, stable identifier for this provider, e.g. `"gemini"`, `"openrouter"`, `"mock"`."""
+        ...
+
+    @property
+    def supports_structured_output(self) -> bool:
+        """Whether this provider can produce a validated instance of a caller-supplied model at all.
+
+        `GatewayChain` skips a provider entirely for `generate_structured`
+        calls when this is `False`, rather than attempting and failing.
+        """
+        ...
+
+    @property
+    def supports_json_schema(self) -> bool:
+        """Whether structured output uses the provider's own native JSON Schema enforcement.
+
+        `False` for a provider that instead achieves structured output via
+        a softer mechanism (e.g. JSON-object mode plus the schema embedded
+        in the prompt, validated on receipt) — still capable of
+        `generate_structured` (see `supports_structured_output`), just
+        with a weaker guarantee that the response actually conforms
+        before validation. Informational only: nothing in this codebase
+        currently branches on it, but it's part of a provider's identity
+        the same way `provider_name` is, useful for logging/diagnostics
+        when structured output fails.
+        """
+        ...
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
         """Generate a single, complete completion for the given request.

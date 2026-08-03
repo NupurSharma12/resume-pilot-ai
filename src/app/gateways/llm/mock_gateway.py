@@ -104,6 +104,18 @@ class MockGateway(LLMGateway):
     so tests that use `MockGateway` can assert on exact content.
     """
 
+    @property
+    def provider_name(self) -> str:
+        return "mock"
+
+    @property
+    def supports_structured_output(self) -> bool:
+        return True
+
+    @property
+    def supports_json_schema(self) -> bool:
+        return True
+
     async def generate(self, request: LLMRequest) -> LLMResponse:
         """Return a synthetic response echoing the request's prompt.
 

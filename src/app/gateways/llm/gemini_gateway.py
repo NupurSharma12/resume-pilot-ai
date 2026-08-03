@@ -11,15 +11,61 @@ onto `google-genai`'s request/response shapes. `generate()` and
 import time
 from collections.abc import AsyncIterator
 
+import httpx
 from google import genai
 from google.genai import types
+from google.genai.errors import ClientError, ServerError
 
 from app.core.config import Settings
 from app.core.logging import get_logger
+from app.gateways.llm.errors import GatewayError, PermanentGatewayError, TransientGatewayError
 from app.gateways.llm.gateway import LLMGateway, T
 from app.gateways.llm.models import LLMRequest, LLMResponse, TokenUsage
 
 logger = get_logger(__name__)
+
+# HTTP status codes on a `ClientError` (4xx) that are still worth retrying
+# against another provider: 429 is rate limiting/quota exhaustion, 408 is
+# a request timeout — both transient in the sense that mean, not that the
+# request itself was invalid. Every other 4xx (400 bad request, 401/403
+# auth) means the request or credentials are wrong and will fail the same
+# way against any provider, so those stay permanent.
+_RETRYABLE_CLIENT_STATUS_CODES = {408, 429}
+
+
+def _classify_exception(exc: Exception) -> GatewayError:
+    """Classify a raw exception from a Gemini network call as transient or permanent.
+
+    This is what lets `GatewayChain` (see `chain.py`) decide whether to
+    fall back to the next provider without knowing anything about
+    `google-genai`'s own exception hierarchy — that mapping lives here,
+    once, as a plain function so it's directly unit-testable without
+    mocking the SDK's client or making a real network call.
+
+    Deliberately only used around the network call itself (see
+    `generate`/`generate_structured`), never around
+    `response_model.model_validate_json(...)`: a `pydantic.ValidationError`
+    there is left to propagate completely unwrapped, exactly as before
+    this classification existed, so `ResumeAnalysisWorkflow`'s existing
+    `except ValidationError` handling (which this sprint must not change)
+    keeps matching it. `GatewayChain` still treats an unwrapped
+    `ValidationError` as non-retryable correctly, via its generic
+    "anything that isn't `TransientGatewayError` stops the chain"
+    fallback — it doesn't need every permanent failure to be an explicit
+    `PermanentGatewayError` to behave correctly, only every *transient*
+    one to be explicitly marked.
+    """
+    if isinstance(exc, ServerError):
+        return TransientGatewayError(f"Gemini server error (HTTP {exc.code}).")
+    if isinstance(exc, ClientError):
+        if exc.code in _RETRYABLE_CLIENT_STATUS_CODES:
+            return TransientGatewayError(
+                f"Gemini client error (HTTP {exc.code}): rate limited or timed out."
+            )
+        return PermanentGatewayError(f"Gemini client error (HTTP {exc.code}): not retryable.")
+    if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)):
+        return TransientGatewayError(f"Gemini network error: {type(exc).__name__}.")
+    return PermanentGatewayError(f"Unclassified Gemini error: {type(exc).__name__}.")
 
 
 class GeminiGateway(LLMGateway):
@@ -57,9 +103,36 @@ class GeminiGateway(LLMGateway):
         selects which concrete Gemini model this adapter calls — that is
         this adapter's own configuration, not a per-request choice made
         by callers that don't know they're talking to Gemini).
+
+        `settings.gemini_api_key` is `str | None` (optional at the
+        `Settings` level, now that provider selection is chain-based —
+        see `core/config.py` — rather than a single required field
+        regardless of whether Gemini is even configured): this
+        constructor is the one place that turns "gemini is in the
+        provider chain but has no key" into a loud, immediate
+        `ValueError`, the same fail-fast philosophy
+        `build_llm_gateway`/`get_resume_analysis_workflow` already use for
+        an unrecognized provider name.
         """
+        if not settings.gemini_api_key:
+            raise ValueError(
+                "gemini_api_key is required to construct GeminiGateway "
+                "(set RESUMEPILOT_GEMINI_API_KEY, or remove 'gemini' from the provider chain)."
+            )
         self._model = settings.gemini_model
         self._client = genai.Client(api_key=settings.gemini_api_key)
+
+    @property
+    def provider_name(self) -> str:
+        return "gemini"
+
+    @property
+    def supports_structured_output(self) -> bool:
+        return True
+
+    @property
+    def supports_json_schema(self) -> bool:
+        return True
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
         """Call the Gemini API and map its response onto `LLMResponse`.
@@ -85,6 +158,15 @@ class GeminiGateway(LLMGateway):
         for measuring elapsed wall-clock time for performance purposes —
         unlike `time.time()`, it's monotonic and unaffected by system
         clock adjustments.
+
+        The network call is wrapped in a `try`/`except` that classifies
+        the failure via `_classify_exception` and raises the classified
+        `TransientGatewayError`/`PermanentGatewayError` `from exc` (the
+        original exception is preserved as `__cause__`, not discarded) —
+        this is what lets `GatewayChain` decide whether to fall back to
+        the next provider. Nothing here catches-and-suppresses: a bare
+        `generate` call (not going through a chain) still ends in an
+        exception propagating to the caller, just a differently-typed one.
         """
         config = types.GenerateContentConfig(
             system_instruction=request.system_prompt,
@@ -93,11 +175,23 @@ class GeminiGateway(LLMGateway):
         )
 
         start = time.perf_counter()
-        response = await self._client.aio.models.generate_content(
-            model=self._model,
-            contents=request.user_prompt,
-            config=config,
-        )
+        try:
+            response = await self._client.aio.models.generate_content(
+                model=self._model,
+                contents=request.user_prompt,
+                config=config,
+            )
+        except Exception as exc:
+            classified = _classify_exception(exc)
+            logger.error(
+                "gemini_generate_failed",
+                provider="gemini",
+                model=self._model,
+                latency_ms=(time.perf_counter() - start) * 1000,
+                error_type=type(exc).__name__,
+                retryable=isinstance(classified, TransientGatewayError),
+            )
+            raise classified from exc
         latency_ms = (time.perf_counter() - start) * 1000
 
         return LLMResponse(
@@ -164,15 +258,16 @@ class GeminiGateway(LLMGateway):
         fields are logged as `None` (`null` in JSON) rather than `0` —
         `0` would misrepresent "not reported" as "reported as zero."
 
-        The network call is wrapped in a `try`/`except` whose only job is
-        to log the failure at ERROR before a bare `raise` — the exact same
-        exception still propagates to the caller unmodified, satisfying
-        "raise the SDK exception directly if structured generation
-        fails": nothing is caught-and-suppressed or caught-and-transformed,
-        only observed. `response_model.model_validate_json(...)` is
-        deliberately left unwrapped: a `pydantic.ValidationError` there is
-        logged by `ResumeAnalysisWorkflow` (the caller), not here, so the
-        failure is logged exactly once rather than at both layers.
+        The network call is wrapped in a `try`/`except` that classifies
+        the failure via `_classify_exception` (see `generate`'s docstring
+        for why, and for the `retryable` log field) and raises `from exc`.
+        `response_model.model_validate_json(...)` is deliberately left
+        unwrapped, exactly as before this classification existed: a
+        `pydantic.ValidationError` there is logged by
+        `ResumeAnalysisWorkflow` (the caller), not here, so the failure is
+        logged exactly once rather than at both layers — and so that
+        existing `except ValidationError` handling keeps matching it
+        unchanged (see `_classify_exception`'s docstring).
         """
         config = types.GenerateContentConfig(
             system_instruction=request.system_prompt,
@@ -190,16 +285,17 @@ class GeminiGateway(LLMGateway):
                 config=config,
             )
         except Exception as exc:
+            classified = _classify_exception(exc)
             logger.error(
                 "gemini_generate_structured_failed",
                 provider="gemini",
                 model=self._model,
                 response_model=response_model.__name__,
                 latency_ms=(time.perf_counter() - start) * 1000,
-                error=str(exc),
                 error_type=type(exc).__name__,
+                retryable=isinstance(classified, TransientGatewayError),
             )
-            raise
+            raise classified from exc
         latency_ms = (time.perf_counter() - start) * 1000
 
         usage = self._extract_usage(response)
