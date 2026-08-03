@@ -1,8 +1,8 @@
-import type { Candidate, ResumeAnalysisResult, SkillMatchNarrative } from './types'
+import type { Candidate, SkillMatchNarrative } from './types'
 
 // Identity/profile fields only — everything analysis-related (score,
-// recommendation, fit summary) lives in `mockResumeAnalysis` below, since
-// that's what the backend actually owns.
+// recommendation, fit summary) comes from the real ResumeAnalysisResult
+// returned by the backend, not from mock data.
 export const candidate: Candidate = {
   name: 'Nupur Sharma',
   initials: 'NS',
@@ -10,79 +10,6 @@ export const candidate: Candidate = {
   company: 'Adobe',
   yearsExperience: 13,
   rating: 4.5,
-}
-
-// Single source of truth, shaped to match the backend's ResumeAnalysisResult
-// response exactly (see src/app/models/resume_analysis.py: overall_assessment,
-// skill_matches, matching_projects, strengths, weaknesses, resume_improvements).
-// The dashboard derives everything analysis-related from this one object, so
-// wiring up the real API later is a matter of replacing this constant with
-// the response body — not restructuring any component.
-export const mockResumeAnalysis: ResumeAnalysisResult = {
-  overall_assessment: {
-    overall_score: 86,
-    hiring_recommendation: {
-      decision: 'Proceed to Interview',
-      reason:
-        'Exceptional product leader with enterprise-grade credentials and cross-functional depth.',
-    },
-    summary:
-      'Exceptional product leader with enterprise-grade credentials and cross-functional depth. Strong technical fluency paired with proven leadership across globally distributed teams makes this candidate a top-tier fit for this role.',
-  },
-  skill_matches: [
-    {
-      category: 'Technical Skills',
-      score: 91,
-      matched_skills: ['API Design', 'System Architecture', 'Data Analytics', 'Cloud Platforms (AWS)'],
-      missing_skills: ['Machine Learning Ops'],
-    },
-    {
-      category: 'Leadership',
-      score: 78,
-      matched_skills: ['Cross-functional Team Leadership', 'Stakeholder Management', 'Mentorship'],
-      missing_skills: ['Direct P&L Ownership', 'Formal People Management at Scale'],
-    },
-    {
-      category: 'Domain Expertise',
-      score: 88,
-      matched_skills: ['Enterprise SaaS', 'Product-Led Growth', 'B2B Platforms'],
-      missing_skills: ['Vertical-specific Compliance Knowledge'],
-    },
-    {
-      category: 'Communication',
-      score: 82,
-      matched_skills: ['Executive Presentations', 'Written Documentation', 'Cross-team Alignment'],
-      missing_skills: ['Public Speaking at Scale'],
-    },
-    {
-      category: 'Experience',
-      score: 93,
-      matched_skills: ['13+ Years Product Management', 'Enterprise-scale Delivery', 'Team Scaling'],
-      missing_skills: [],
-    },
-  ],
-  matching_projects: [
-    {
-      title: 'Enterprise Platform Migration',
-      relevance_score: 92,
-      reason: 'Directly demonstrates large-scale product ownership relevant to this role.',
-    },
-  ],
-  strengths: [
-    'Deep technical fluency across backend systems and cloud infrastructure',
-    'Proven cross-functional leadership across globally distributed teams',
-  ],
-  weaknesses: [
-    'Limited direct P&L ownership',
-    'No hands-on machine learning operations experience',
-  ],
-  resume_improvements: [
-    {
-      section: 'Leadership',
-      recommendation: 'Quantify team size and P&L scope managed in prior roles.',
-      priority: 1,
-    },
-  ],
 }
 
 // The backend's SkillMatch only ever carries category/score/matched_skills/

@@ -1,9 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import TopHeader from '../components/TopHeader'
 import InputSection from '../components/InputSection'
-import type { ResumeInputValue } from '../components/ResumeInput'
-import type { JobDescriptionInputValue } from '../components/JobDescriptionInput'
 import CandidateHeroCard from '../components/CandidateHeroCard'
 import WhyThisScoreCard from '../components/WhyThisScoreCard'
 import MetricCard from '../components/MetricCard'
@@ -17,46 +15,80 @@ import { buildExecutiveSummary, deriveTopStrengths, deriveTopRisks } from '../li
 import { analyzeResume, ApiError } from '../lib/api'
 import type { DashboardOutletContext } from '../layouts/DashboardLayout'
 
-type AnalysisStatus = 'idle' | 'loading' | 'success' | 'error'
-
 export default function DashboardPage() {
-  // `resumeAnalysis` lives one level up, in DashboardLayout, and is shared
-  // via Outlet context — not local state here — so the sidebar's summary
-  // card and this page always render the same analysis, never two
-  // independently-drifting copies of it (see DashboardLayout's docstring).
-  const { resumeAnalysis, setResumeAnalysis } = useOutletContext<DashboardOutletContext>()
+  // Everything here (including status/errorMessage/isInputCollapsed) lives
+  // one level up, in DashboardLayout, and is shared via Outlet context —
+  // not local state — because this page unmounts whenever the user
+  // navigates to /resume, /job-description, /history, or /settings, and
+  // needs to show the same result when they come back (see
+  // DashboardLayout's docstring).
+  const {
+    resumeAnalysis,
+    setResumeAnalysis,
+    resume,
+    onResumeChange,
+    jobDescription,
+    onJobDescriptionChange,
+    status,
+    setStatus,
+    errorMessage,
+    setErrorMessage,
+    isInputCollapsed,
+    setIsInputCollapsed,
+  } = useOutletContext<DashboardOutletContext>()
 
-  // Starts 'idle', looking exactly like the pre-integration mock dashboard —
-  // nothing changes on screen until a user actually triggers an analysis.
-  const [status, setStatus] = useState<AnalysisStatus>('idle')
-  const [errorMessage, setErrorMessage] = useState('')
+  // Selection is intentionally local (purely cosmetic — which metric card
+  // is highlighted) and falls back to the first category below when unset,
+  // so navigating back to an already-analyzed dashboard still shows a
+  // sensible default panel instead of nothing.
+  const [selectedCategory, setSelectedCategory] = useState<string | undefined>(undefined)
 
-  // The two real inputs. Only the resolved {text, fileName} is kept here —
-  // file objects and extraction status stay local to ResumeInput/
-  // JobDescriptionInput (see their own comments).
-  const [resume, setResume] = useState<ResumeInputValue | null>(null)
-  const [jobDescription, setJobDescription] = useState<JobDescriptionInputValue | null>(null)
-  const [isInputCollapsed, setIsInputCollapsed] = useState(false)
+  const resultsRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
 
-  const { overall_assessment, skill_matches } = resumeAnalysis
+  // Tracks the previous status (not "is this the first render") so that
+  // simply navigating back to an already-successful dashboard doesn't
+  // re-trigger the scroll — only an actual ->'success' transition does.
+  // A first-render boolean would work for a normal render but silently
+  // re-arms on StrictMode's dev-only double effect invocation (the second
+  // simulated pass would see "not first render" and scroll anyway even
+  // though status never changed); comparing against the last status seen
+  // stays correct either way, since both passes see the same status.
+  const prevStatusRef = useRef(status)
+  useEffect(() => {
+    const prevStatus = prevStatusRef.current
+    prevStatusRef.current = status
+    if (status === 'success' && prevStatus !== 'success') {
+      resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }, [status])
 
-  const [selectedCategory, setSelectedCategory] = useState<string | undefined>(
-    skill_matches[0]?.category,
-  )
+  function handleSelectCategory(category: string) {
+    setSelectedCategory(category)
+    // `block: 'nearest'` is a no-op if the panel is already fully in
+    // view, so this only scrolls "if necessary."
+    panelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }
 
-  const selectedIndex = skill_matches.findIndex((s) => s.category === selectedCategory)
-  const selectedSkillMatch = selectedIndex >= 0 ? skill_matches[selectedIndex] : undefined
+  // Safe defaults for when there's no analysis yet — never read while
+  // `resumeAnalysis` is null because rendering below is gated on
+  // `hasResult`, but keeping these typed without non-null assertions.
+  const skillMatches = resumeAnalysis?.skill_matches ?? []
+  const effectiveCategory = selectedCategory ?? skillMatches[0]?.category
+  const selectedIndex = skillMatches.findIndex((s) => s.category === effectiveCategory)
+  const selectedSkillMatch = selectedIndex >= 0 ? skillMatches[selectedIndex] : undefined
   const selectedNarrative = selectedSkillMatch
     ? (skillMatchNarratives[selectedSkillMatch.category] ?? defaultSkillMatchNarrative)
     : undefined
 
   // Derived, read-only insights — pure functions of `resumeAnalysis`, no
   // extra state. Recomputed each render; cheap given the small arrays involved.
-  const executiveSummary = buildExecutiveSummary(resumeAnalysis)
-  const topStrengths = deriveTopStrengths(resumeAnalysis)
-  const topRisks = deriveTopRisks(resumeAnalysis)
+  const executiveSummary = resumeAnalysis ? buildExecutiveSummary(resumeAnalysis) : []
+  const topStrengths = resumeAnalysis ? deriveTopStrengths(resumeAnalysis) : []
+  const topRisks = resumeAnalysis ? deriveTopRisks(resumeAnalysis) : []
 
   const canAnalyze = Boolean(resume) && Boolean(jobDescription)
+  const hasResult = status === 'success' && resumeAnalysis !== null
 
   async function handleAnalyze() {
     if (!resume || !jobDescription) return
@@ -89,8 +121,8 @@ export default function DashboardPage() {
         <InputSection
           resume={resume}
           jobDescription={jobDescription}
-          onResumeChange={setResume}
-          onJobDescriptionChange={setJobDescription}
+          onResumeChange={onResumeChange}
+          onJobDescriptionChange={onJobDescriptionChange}
           isCollapsed={isInputCollapsed}
           onExpand={() => setIsInputCollapsed(false)}
           onAnalyze={handleAnalyze}
@@ -104,19 +136,19 @@ export default function DashboardPage() {
           <AnalysisErrorState message={errorMessage} onRetry={handleAnalyze} />
         )}
 
-        {(status === 'idle' || status === 'success') && (
-          <div key={status} className="animate-panel-fade space-y-8">
+        {hasResult && resumeAnalysis && (
+          <div ref={resultsRef} className="animate-panel-fade space-y-8">
             <CandidateHeroCard
               candidate={candidate}
-              overallAssessment={overall_assessment}
-              skillMatches={skill_matches}
+              overallAssessment={resumeAnalysis.overall_assessment}
+              skillMatches={resumeAnalysis.skill_matches}
               executiveSummary={executiveSummary}
             />
 
             <WhyThisScoreCard topStrengths={topStrengths} topRisks={topRisks} />
 
             <div className="grid grid-cols-5 gap-5">
-              {skill_matches.map((skillMatch, index) => (
+              {resumeAnalysis.skill_matches.map((skillMatch, index) => (
                 <MetricCard
                   key={skillMatch.category}
                   skillMatch={skillMatch}
@@ -125,19 +157,21 @@ export default function DashboardPage() {
                     (skillMatchNarratives[skillMatch.category] ?? defaultSkillMatchNarrative)
                       .recruiterSummary
                   }
-                  isSelected={selectedCategory === skillMatch.category}
-                  onSelect={setSelectedCategory}
+                  isSelected={effectiveCategory === skillMatch.category}
+                  onSelect={handleSelectCategory}
                 />
               ))}
             </div>
 
             {selectedSkillMatch && selectedNarrative && (
-              <AnalysisPanel
-                skillMatch={selectedSkillMatch}
-                theme={getThemeForIndex(selectedIndex)}
-                aiSummary={selectedNarrative.aiSummary}
-                recommendation={selectedNarrative.recommendation}
-              />
+              <div ref={panelRef}>
+                <AnalysisPanel
+                  skillMatch={selectedSkillMatch}
+                  theme={getThemeForIndex(selectedIndex)}
+                  aiSummary={selectedNarrative.aiSummary}
+                  recommendation={selectedNarrative.recommendation}
+                />
+              </div>
             )}
           </div>
         )}

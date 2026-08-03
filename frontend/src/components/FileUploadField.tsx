@@ -10,6 +10,10 @@ interface FileUploadFieldProps {
   variant?: 'dropzone' | 'button'
   buttonLabel?: string
   file: File | null
+  // Name of a file that was resolved in a previous mount (its real `File`
+  // object can't be restored) — shown in the same "selected" row as
+  // `file` so a restored value never renders as an empty picker.
+  restoredFileName?: string | null
   status: ExtractionStatus
   error: string | null
   onFileSelected: (file: File) => void
@@ -36,6 +40,7 @@ export default function FileUploadField({
   variant = 'dropzone',
   buttonLabel = 'Browse Files',
   file,
+  restoredFileName = null,
   status,
   error,
   onFileSelected,
@@ -81,7 +86,9 @@ export default function FileUploadField({
     />
   )
 
-  if (file) {
+  const displayName = file?.name ?? restoredFileName
+
+  if (displayName) {
     return (
       <div>
         <div className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
@@ -93,7 +100,7 @@ export default function FileUploadField({
               <CheckCircle2 size={16} className="shrink-0 text-emerald-500" />
             )}
             {status === 'error' && <AlertTriangle size={16} className="shrink-0 text-rose-500" />}
-            <span className="truncate">{file.name}</span>
+            <span className="truncate">{displayName}</span>
           </span>
           <span className="flex shrink-0 items-center gap-3 text-xs font-medium">
             <button type="button" onClick={openPicker} className="text-indigo-600 hover:underline">

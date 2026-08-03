@@ -47,8 +47,8 @@ export default function InputSection({
 
       <div className={isCollapsed ? 'hidden' : ''}>
         <div className="grid grid-cols-2 gap-6">
-          <ResumeInput onChange={onResumeChange} />
-          <JobDescriptionInput onChange={onJobDescriptionChange} />
+          <ResumeInput value={resume} onChange={onResumeChange} />
+          <JobDescriptionInput value={jobDescription} onChange={onJobDescriptionChange} />
         </div>
 
         <div className="mt-6 flex justify-end">

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { CheckCircle2 } from 'lucide-react'
 import FileUploadField from './FileUploadField'
 import { useExtractedFile } from '../hooks/useExtractedFile'
@@ -9,6 +9,10 @@ export interface JobDescriptionInputValue {
 }
 
 interface JobDescriptionInputProps {
+  // The currently-resolved JD, owned by a parent (see DashboardLayout) —
+  // same "source of truth for what's current" role as ResumeInput's
+  // `value` prop.
+  value: JobDescriptionInputValue | null
   onChange: (value: JobDescriptionInputValue | null) => void
 }
 
@@ -20,11 +24,40 @@ const ACCEPT_LABEL = 'PDF, DOCX, TXT, or MD'
 // state are local to this component (same "only lift the resolved value"
 // pattern as ResumeInput) — the parent only ever sees the final
 // {text, fileName} via onChange.
-export default function JobDescriptionInput({ onChange }: JobDescriptionInputProps) {
-  const [text, setText] = useState('')
+export default function JobDescriptionInput({ value, onChange }: JobDescriptionInputProps) {
+  // Seeds from `value` only for the pasted-text case (a file-derived
+  // value renders through the FileUploadField restoration path below
+  // instead) — so remounting with previously-pasted text still shows it.
+  const [text, setText] = useState(value?.fileName == null ? (value?.text ?? '') : '')
   const { file, text: fileText, status, error, selectFile, clear } = useExtractedFile()
 
+  // See ResumeInput for why this guards on actual user interaction rather
+  // than "is this the first effect run": StrictMode's dev-only double
+  // effect invocation would otherwise let a stale second pass wipe an
+  // already-resolved value on every mount, not just navigation.
+  const hasInteracted = useRef(false)
+
+  function handleTextChange(newText: string) {
+    hasInteracted.current = true
+    setText(newText)
+  }
+
+  function handleSelectFile(newFile: File) {
+    hasInteracted.current = true
+    void selectFile(newFile)
+  }
+
+  function handleRemove() {
+    hasInteracted.current = true
+    if (file) {
+      clear()
+    } else {
+      onChange(null)
+    }
+  }
+
   useEffect(() => {
+    if (!hasInteracted.current) return
     if (file && status === 'ready' && fileText) {
       onChange({ text: fileText, fileName: file.name })
     } else if (!file && text.trim()) {
@@ -34,28 +67,35 @@ export default function JobDescriptionInput({ onChange }: JobDescriptionInputPro
     }
   }, [file, status, fileText, text, onChange])
 
+  // A file picked during this mount always wins; otherwise fall back to
+  // a file-derived `value` from a previous mount, so it still renders as
+  // a resolved file row rather than an empty picker.
+  const restoredFileName = !file ? (value?.fileName ?? null) : null
+  const showFileRow = Boolean(file) || Boolean(restoredFileName)
+
   const characterCount = text.trim().length
 
   return (
     <div>
       <p className="mb-2 text-sm font-semibold text-gray-900">Job Description</p>
 
-      {file ? (
+      {showFileRow ? (
         <FileUploadField
           variant="button"
           accept={ACCEPT}
           acceptLabel={ACCEPT_LABEL}
           file={file}
-          status={status}
-          error={error}
-          onFileSelected={selectFile}
-          onRemove={clear}
+          restoredFileName={restoredFileName}
+          status={file ? status : 'ready'}
+          error={file ? error : null}
+          onFileSelected={handleSelectFile}
+          onRemove={handleRemove}
         />
       ) : (
         <>
           <textarea
             value={text}
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => handleTextChange(event.target.value)}
             placeholder="Paste the Job Description here..."
             rows={6}
             className="w-full resize-none rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-700 placeholder:text-gray-400 focus:border-indigo-400 focus:outline-none"
@@ -83,8 +123,8 @@ export default function JobDescriptionInput({ onChange }: JobDescriptionInputPro
               file={file}
               status={status}
               error={error}
-              onFileSelected={selectFile}
-              onRemove={clear}
+              onFileSelected={handleSelectFile}
+              onRemove={handleRemove}
             />
           </div>
         </>
