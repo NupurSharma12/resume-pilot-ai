@@ -30,9 +30,7 @@ from app.api.v1.models.career_conversation import (
 )
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
-from app.gateways.llm.gateway import LLMGateway
-from app.gateways.llm.gemini_gateway import GeminiGateway
-from app.gateways.llm.mock_gateway import MockGateway
+from app.gateways.llm.factory import build_llm_gateway
 from app.models.career_conversation import ConversationSessionStatus
 from app.models.resume_analysis import (
     HiringRecommendation,
@@ -56,13 +54,12 @@ def get_career_conversation_workflow(
 ) -> CareerConversationWorkflow:
     """Construct a `CareerConversationWorkflow` wired with its current dependencies.
 
-    Mirrors `analyze.py`'s `get_resume_analysis_workflow` exactly: gateway
-    selection based on `settings.llm_provider` (obtained via
-    `Depends(get_settings)`, `"mock"`/`"gemini"` handled explicitly, any
-    other value raising `ValueError`), a new workflow instance per
-    request rather than a cached singleton, since both gateways are cheap
-    and stateless to construct. See that function's docstring for the
-    full reasoning, which applies unchanged here.
+    Mirrors `analyze.py`'s `get_resume_analysis_workflow` exactly: the
+    gateway is a provider chain built by `build_llm_gateway` from
+    `settings` (obtained via `Depends(get_settings)`), a new workflow
+    instance per request rather than a cached singleton, since every
+    gateway is cheap and stateless to construct. See that function's
+    docstring for the full reasoning, which applies unchanged here.
 
     Note for local/dev use: `MockGateway.generate_structured` builds a
     generic, type-driven placeholder for *any* response model (see its
@@ -73,20 +70,12 @@ def get_career_conversation_workflow(
     is an inherent consequence of `MockGateway` staying generic and
     domain-blind (a property worth preserving, not special-casing away)
     rather than a bug in either class: exercising this endpoint's happy
-    path — locally or in tests — requires `llm_provider="gemini"` or a
-    dedicated test double, not the default mock provider.
+    path — locally or in tests — requires a real provider ahead of
+    `"mock"` in the chain, or a dedicated test double, not `"mock"` alone.
     """
-    if settings.llm_provider == "mock":
-        gateway: LLMGateway = MockGateway()
-    elif settings.llm_provider == "gemini":
-        gateway = GeminiGateway(settings)
-    else:
-        logger.error("unknown_llm_provider", llm_provider=settings.llm_provider)
-        raise ValueError(f"Unknown llm_provider: {settings.llm_provider!r}")
-
     return CareerConversationWorkflow(
         prompt_builder=CareerConversationPromptBuilder(),
-        gateway=gateway,
+        gateway=build_llm_gateway(settings),
     )
 
 

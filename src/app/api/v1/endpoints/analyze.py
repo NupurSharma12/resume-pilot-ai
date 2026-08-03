@@ -3,8 +3,10 @@
 Wires an HTTP request to `ResumeAnalysisWorkflow` and back. Contains no
 business logic itself — it only translates between the API schema and the
 workflow's inputs/outputs, and constructs the workflow's dependencies. The
-gateway used is selected per request via `settings.llm_provider` (`"mock"`
-by default, requiring no API tokens; `"gemini"` for real calls).
+gateway is a provider chain built by `build_llm_gateway` from
+`RESUMEPILOT_PRIMARY_PROVIDER`/`_SECONDARY_PROVIDER`/`_TERTIARY_PROVIDER`
+(see `gateways/llm/factory.py`) — this endpoint has no gateway-selection
+logic of its own beyond calling that one shared function.
 
 Logs request-level metadata (lengths, provider, elapsed time,
 success/failure) at INFO/ERROR — never resume/job-description content or
@@ -26,9 +28,7 @@ from app.api.v1.models.analyze_resume import (
 )
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
-from app.gateways.llm.gateway import LLMGateway
-from app.gateways.llm.gemini_gateway import GeminiGateway
-from app.gateways.llm.mock_gateway import MockGateway
+from app.gateways.llm.factory import build_llm_gateway
 from app.prompts.resume_analysis_prompt_builder import ResumeAnalysisPromptBuilder
 from app.workflows.resume_analysis_workflow import ResumeAnalysisWorkflow
 
@@ -50,41 +50,27 @@ def get_resume_analysis_workflow(
     longer a parser to wire in: `ResumeAnalysisWorkflow` now gets a
     validated `ResumeAnalysisResult` directly from the gateway's
     `generate_structured`, so `ResumeAnalysisResponseParser` has nothing
-    left to do here (it still exists, just unused by this workflow). The
-    gateway is selected based on `settings.llm_provider`, itself obtained
-    via `Depends(get_settings)` rather than imported and called directly —
-    keeping this function's only source of configuration consistent with
-    how the rest of the app reads settings (through the cached
-    `get_settings` dependency, not ad hoc construction), and making it
-    straightforward to override `get_settings` in tests via FastAPI's
-    dependency-override mechanism.
+    left to do here (it still exists, just unused by this workflow).
 
-    `"mock"` and `"gemini"` are handled explicitly, and any other value
-    raises `ValueError` rather than silently falling back to a default
-    provider: an unrecognized `llm_provider` almost certainly means a
-    misconfigured environment, and failing loudly at request time (this
-    function is re-evaluated per request, so a bad value is never
-    latched-in past a config fix) is safer than quietly serving mock
-    responses in what was meant to be a real-provider deployment, or vice
-    versa.
+    The gateway itself — which provider(s), in what order, with what
+    fallback behavior — is entirely `build_llm_gateway`'s decision (see
+    `gateways/llm/factory.py`): this function's only job is to obtain
+    `settings` via `Depends(get_settings)` (keeping this function's only
+    source of configuration consistent with how the rest of the app reads
+    settings, and straightforward to override in tests via FastAPI's
+    dependency-override mechanism) and hand it off. Provider selection,
+    chain ordering, and "what counts as an unrecognized provider name"
+    all now live in exactly one place shared by every workflow, not
+    duplicated per endpoint.
 
-    A new gateway (and workflow) instance is constructed per call rather
-    than cached, since both `MockGateway` and `GeminiGateway` are cheap and
-    stateless to construct — there is no cost or correctness reason to
-    share instances across requests, and per-call construction keeps this
-    function simple.
+    A new gateway chain (and workflow) instance is constructed per call
+    rather than cached, since every gateway is cheap and stateless to
+    construct — there is no cost or correctness reason to share instances
+    across requests, and per-call construction keeps this function simple.
     """
-    if settings.llm_provider == "mock":
-        gateway: LLMGateway = MockGateway()
-    elif settings.llm_provider == "gemini":
-        gateway = GeminiGateway(settings)
-    else:
-        logger.error("unknown_llm_provider", llm_provider=settings.llm_provider)
-        raise ValueError(f"Unknown llm_provider: {settings.llm_provider!r}")
-
     return ResumeAnalysisWorkflow(
         prompt_builder=ResumeAnalysisPromptBuilder(),
-        gateway=gateway,
+        gateway=build_llm_gateway(settings),
     )
 
 
@@ -107,7 +93,7 @@ async def analyze_resume(
 
     Logs request-received and request-completed/-failed events with
     `provider` and `elapsed_ms`. `settings` is an added dependency
-    (alongside `workflow`) purely so `settings.llm_provider` is available
+    (alongside `workflow`) purely so `settings.primary_provider` is available
     to log — it plays no role in the response. Only `len(payload.resume)`/
     `len(payload.job_description)` are logged, never the text itself; the
     generated `result` is never logged either, per the no-content-logging
@@ -121,7 +107,7 @@ async def analyze_resume(
         "analyze_request_received",
         resume_length=len(payload.resume),
         job_description_length=len(payload.job_description),
-        provider=settings.llm_provider,
+        provider=settings.primary_provider,
     )
     start = time.perf_counter()
     try:
@@ -132,7 +118,7 @@ async def analyze_resume(
     except Exception as exc:
         logger.error(
             "analyze_request_failed",
-            provider=settings.llm_provider,
+            provider=settings.primary_provider,
             elapsed_ms=(time.perf_counter() - start) * 1000,
             error=str(exc),
             error_type=type(exc).__name__,
@@ -140,7 +126,7 @@ async def analyze_resume(
         raise
     logger.info(
         "analyze_request_completed",
-        provider=settings.llm_provider,
+        provider=settings.primary_provider,
         elapsed_ms=(time.perf_counter() - start) * 1000,
     )
     return AnalyzeResumeResponse(
