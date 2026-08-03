@@ -5,6 +5,7 @@ import TopHeader from '../components/TopHeader'
 import Button from '../components/Button'
 import IndeterminateBar from '../components/IndeterminateBar'
 import ConversationQuestionBubble from '../components/ConversationQuestionBubble'
+import ConversationAssistantReplyBubble from '../components/ConversationAssistantReplyBubble'
 import ConversationAnswerBubble from '../components/ConversationAnswerBubble'
 import ConversationLoadingState from '../components/ConversationLoadingState'
 import ConversationErrorState from '../components/ConversationErrorState'
@@ -35,8 +36,24 @@ export default function CareerConversationPage() {
   // could still land here with nothing to ground it in.
   const hasContext = resumeAnalysis !== null && resume !== null && jobDescription !== null
 
+  // Set synchronously at the top of each in-flight request and cleared
+  // in `finally`, so a second invocation arriving before the first
+  // resolves — a fast retry click, or two click events dispatched close
+  // enough together that React hasn't re-rendered the `disabled` button
+  // yet — bails out immediately instead of firing a second request. The
+  // `disabled` prop below is still correct UX (it's what the user sees),
+  // but a `boolean` derived from React state only takes effect after a
+  // render; this ref closes that window at the source rather than
+  // relying on render timing. The backend is still the authoritative
+  // guard against a duplicate request landing (see
+  // `submit_career_conversation_answer`'s in-lock recheck) — this just
+  // avoids sending a request that's already known to be redundant.
+  const isBusyRef = useRef(false)
+
   const startSession = useCallback(async () => {
     if (!resume || !jobDescription || !resumeAnalysis) return
+    if (isBusyRef.current) return
+    isBusyRef.current = true
     setApiStatus('starting')
     setErrorMessage('')
     try {
@@ -49,6 +66,8 @@ export default function CareerConversationPage() {
         err instanceof ApiError ? err.message : 'An unexpected error occurred. Please try again.',
       )
       setApiStatus('error')
+    } finally {
+      isBusyRef.current = false
     }
   }, [resume, jobDescription, resumeAnalysis])
 
@@ -70,6 +89,8 @@ export default function CareerConversationPage() {
 
   async function handleSubmitAnswer() {
     if (!session || !answer.trim()) return
+    if (isBusyRef.current) return
+    isBusyRef.current = true
     setApiStatus('submitting')
     setErrorMessage('')
     try {
@@ -83,6 +104,8 @@ export default function CareerConversationPage() {
         err instanceof ApiError ? err.message : 'An unexpected error occurred. Please try again.',
       )
       setApiStatus('error')
+    } finally {
+      isBusyRef.current = false
     }
   }
 
@@ -125,6 +148,9 @@ export default function CareerConversationPage() {
           <div className="mx-auto max-w-3xl space-y-6">
             {session?.history.map((exchange, index) => (
               <div key={index} className="space-y-4">
+                {exchange.assistant_response && (
+                  <ConversationAssistantReplyBubble text={exchange.assistant_response} />
+                )}
                 <ConversationQuestionBubble topic={exchange.topic} question={exchange.question} />
                 <ConversationAnswerBubble answer={exchange.answer} />
               </div>
@@ -140,6 +166,11 @@ export default function CareerConversationPage() {
 
             {apiStatus !== 'error' && session?.status === 'in_progress' && session.current_question && (
               <div ref={activeSectionRef} className="animate-panel-fade space-y-4">
+                {session.current_question.assistant_response && (
+                  <ConversationAssistantReplyBubble
+                    text={session.current_question.assistant_response}
+                  />
+                )}
                 <ConversationQuestionBubble
                   topic={session.current_question.topic}
                   question={session.current_question.question}

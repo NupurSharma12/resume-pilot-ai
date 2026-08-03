@@ -80,6 +80,36 @@ demonstrates. If you cannot identify a gap whose evidence would \
 meaningfully change how strong this resume looks for this job, that is a \
 signal you may be done, not a reason to ask a weaker question anyway.
 
+## Respond to the candidate before moving on
+
+Before deciding what to ask next, read the candidate's most recent answer \
+carefully — not just for evidence, but for how they engaged with your \
+question. Two situations call for a brief reply of your own, in \
+`assistant_response`, before your next question:
+
+- The candidate asked you a technical or clarifying question back (e.g. \
+"What do you mean by direct P&L ownership?" or "Are you asking about the \
+whole platform or just my team's part?"). Answer it yourself, concisely \
+(2-5 sentences), in a natural, helpful recruiter's voice, then transition \
+smoothly into your next question — don't just answer and stop, and don't \
+ignore their question and ask something unrelated.
+- The candidate corrected something you had assumed or implied (e.g. \
+"Just to clarify, I wasn't the sole owner of that project" or "Actually \
+that was Python, not Java"). Briefly acknowledge the correction in \
+`assistant_response` — don't just silently absorb it — and treat the \
+corrected information as accurate for the rest of this conversation: do \
+not repeat the outdated assumption, and let the correction inform which \
+gap you judge most valuable to explore next.
+
+In every other case — the candidate simply answered your question — leave \
+`assistant_response` null. Do not manufacture a reply just to have one; a \
+generic "Thanks for sharing that" before every question would make you \
+sound like a chatbot, which is exactly what this conversation must not \
+feel like. When `assistant_response` is present, it should read as one \
+continuous, natural turn together with the question that follows it, not \
+a separate, disconnected acknowledgment. Leave it null whenever you are \
+stopping — it only ever precedes a next question.
+
 ## Deciding whether to continue or stop
 
 Weigh what has already been recovered across the whole conversation so \
@@ -108,7 +138,9 @@ description, in one or two sentences. `estimated_impact` should reflect \
 how much recovering this evidence would strengthen this resume's fit for \
 this job if the candidate can speak to it well. `question` should be the \
 exact conversational message to show the candidate — natural, warm, \
-specific, and never generic AI filler phrasing.\
+specific, and never generic AI filler phrasing. `assistant_response`, when \
+not null, should be equally natural — the words a real recruiter would \
+actually say, not a templated acknowledgment.\
 """
 
 
@@ -148,13 +180,21 @@ def _format_history(history: list[ConversationExchange]) -> str:
 
     Numbered so the model can easily refer to "the conversation so far"
     without ambiguity, and so it's obvious at a glance how many topics
-    have already been covered.
+    have already been covered. Includes each exchange's
+    `assistant_response`, when present, as its own line before the
+    question it preceded — this is what the model itself already said
+    (an answer it gave, or a correction it acknowledged), so including it
+    lets the model stay consistent with its own prior replies instead of
+    re-answering the same clarifying question twice or forgetting a
+    correction it already accepted.
     """
     if not history:
         return "No conversation has happened yet. This is the first turn."
     lines = []
     for index, exchange in enumerate(history, start=1):
         lines.append(f"{index}. Topic: {exchange.topic}")
+        if exchange.assistant_response:
+            lines.append(f"   You said: {exchange.assistant_response}")
         lines.append(f"   Question asked: {exchange.question}")
         lines.append(f"   Candidate's answer: {exchange.answer}")
     return "\n".join(lines)

@@ -56,6 +56,13 @@ class ConversationQuestionResponse(BaseModel):
     estimated_impact: EstimatedImpact = Field(
         description="How much recovering this evidence would strengthen the resume's fit."
     )
+    assistant_response: str | None = Field(
+        description=(
+            "A reply to the candidate's previous answer — answering a question they "
+            "asked back, or acknowledging a correction — shown before this question, "
+            "if any."
+        ),
+    )
 
 
 class ConversationExchangeResponse(BaseModel):
@@ -66,6 +73,9 @@ class ConversationExchangeResponse(BaseModel):
     topic: str = Field(description="Short label for the evidence gap this exchange targeted.")
     question: str = Field(description="The conversational question that was asked.")
     answer: str = Field(description="The candidate's answer to that question.")
+    assistant_response: str | None = Field(
+        description="A reply from the recruiter shown before this question, if any."
+    )
 
 
 class ConversationSessionResponse(BaseModel):

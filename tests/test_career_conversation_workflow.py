@@ -8,6 +8,7 @@ placeholder can't satisfy the should_stop/question invariant this
 workflow enforces.
 """
 
+import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
@@ -37,16 +38,32 @@ class FakeGateway:
     Raises `AssertionError` if called more times than decisions were
     supplied — this is what lets `test_hard_stop_at_max_turns` assert the
     workflow never makes a 9th call once the turn cap is reached.
+
+    `delay_seconds` (default `0`, no behavior change for existing tests)
+    inserts a real `asyncio.sleep` before returning — a real Gemini call
+    always has some latency, which is exactly what gives two concurrent
+    requests room to interleave around it. Without any delay here, an
+    in-process test that fires two "concurrent" requests via
+    `asyncio.gather` never actually observes them interleave: with no
+    `await` between the endpoint's pre-lock status check and this call
+    returning, the first request's coroutine runs to completion before
+    the event loop even starts the second one. A small delay is what
+    makes `test_concurrent_answers_...` in `test_career_conversation_api.py`
+    a faithful reproduction of the real race, not just an assertion about
+    code that happens to look correct.
     """
 
-    def __init__(self, decisions: list[ConversationTurnDecision]) -> None:
+    def __init__(self, decisions: list[ConversationTurnDecision], delay_seconds: float = 0) -> None:
         self._decisions = list(decisions)
+        self._delay_seconds = delay_seconds
         self.call_count = 0
 
     async def generate(self, request: LLMRequest) -> LLMResponse:
         raise NotImplementedError("Unused by CareerConversationWorkflow.")
 
     async def generate_structured(self, request: LLMRequest, response_model: type[BaseModel]):
+        if self._delay_seconds:
+            await asyncio.sleep(self._delay_seconds)
         assert self._decisions, "FakeGateway called more times than decisions were programmed."
         self.call_count += 1
         return self._decisions.pop(0)
@@ -56,7 +73,9 @@ class FakeGateway:
         yield  # pragma: no cover - makes this an async generator
 
 
-def _continue_decision(confidence: int = 40) -> ConversationTurnDecision:
+def _continue_decision(
+    confidence: int = 40, assistant_response: str | None = None
+) -> ConversationTurnDecision:
     return ConversationTurnDecision(
         confidence=confidence,
         should_stop=False,
@@ -64,6 +83,7 @@ def _continue_decision(confidence: int = 40) -> ConversationTurnDecision:
         evidence_goal="Determine whether internal tooling work used React.",
         estimated_impact=EstimatedImpact.HIGH,
         question="I noticed you've worked on internal tooling. What frontend tech did you use?",
+        assistant_response=assistant_response,
     )
 
 
@@ -122,6 +142,53 @@ async def test_start_conversation_sets_first_question(
     assert session.current_question.topic == "Frontend framework experience"
     assert session.last_confidence == 30
     assert gateway.call_count == 1
+
+
+async def test_assistant_response_is_attached_to_the_next_question(
+    resume_analysis: ResumeAnalysisResult,
+) -> None:
+    gateway = FakeGateway(
+        [
+            _continue_decision(confidence=30),
+            _continue_decision(
+                confidence=50,
+                assistant_response=(
+                    "Direct P&L ownership means owning the budget and revenue targets "
+                    "for a product line, not just the roadmap."
+                ),
+            ),
+        ]
+    )
+    workflow = CareerConversationWorkflow(CareerConversationPromptBuilder(), gateway)
+    session = _new_session(resume_analysis)
+    await workflow.start_conversation(session)
+    assert session.current_question is not None
+    assert session.current_question.assistant_response is None
+
+    await workflow.submit_answer(session, "What do you mean by direct P&L ownership?")
+
+    assert session.current_question is not None
+    assert session.current_question.assistant_response is not None
+    assert "budget and revenue targets" in session.current_question.assistant_response
+
+
+async def test_assistant_response_carries_into_history_once_answered(
+    resume_analysis: ResumeAnalysisResult,
+) -> None:
+    gateway = FakeGateway(
+        [
+            _continue_decision(confidence=30, assistant_response="An earlier clarification."),
+            _stop_decision(confidence=95, reason="No gaps remain."),
+        ]
+    )
+    workflow = CareerConversationWorkflow(CareerConversationPromptBuilder(), gateway)
+    session = _new_session(resume_analysis)
+    await workflow.start_conversation(session)
+
+    await workflow.submit_answer(session, "Got it, thanks.")
+
+    assert len(session.history) == 1
+    assert session.history[0].assistant_response == "An earlier clarification."
 
 
 async def test_submit_answer_records_history_and_advances(

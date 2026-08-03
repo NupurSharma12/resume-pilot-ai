@@ -162,6 +162,7 @@ def _to_session_response(session: ConversationSession) -> ConversationSessionRes
                 topic=exchange.topic,
                 question=exchange.question,
                 answer=exchange.answer,
+                assistant_response=exchange.assistant_response,
             )
             for exchange in session.history
         ],
@@ -171,6 +172,7 @@ def _to_session_response(session: ConversationSession) -> ConversationSessionRes
                 question=current_question.question,
                 evidence_goal=current_question.evidence_goal,
                 estimated_impact=current_question.estimated_impact,
+                assistant_response=current_question.assistant_response,
             )
             if current_question is not None
             else None
@@ -243,12 +245,28 @@ async def submit_career_conversation_answer(
 ) -> ConversationSessionResponse:
     """Record an answer to a session's current question and return the next turn (or completion).
 
-    `404` if `session_id` is unknown; `409` if the session has already
-    completed (there is no open question to answer) — both are client
-    errors caught before the workflow is ever invoked, not conditions the
-    workflow itself needs to handle. The per-session lock guards against a
-    concurrent duplicate submission for the same session interleaving two
-    turns; see `ConversationSession`'s docstring.
+    `404` if `session_id` is unknown; `409` if the session has no open
+    question to answer — either because it already completed, or because
+    a *concurrent* request for the same session got there first (e.g. a
+    client retry racing an original request that's still being processed
+    — the original request isn't necessarily slow or stuck, just still
+    in flight when the client, having given up waiting, retries).
+
+    The status is checked twice, not once: once before acquiring
+    `session.lock` (a fast path — avoids lock contention and an LLM call
+    for the common case of a client retrying against an
+    already-known-complete session), and once more *inside* the lock,
+    immediately before calling the workflow. That second check is the one
+    that actually matters for correctness: two concurrent requests can
+    both pass the first check (neither has completed the session yet),
+    then both queue on the lock. Without the in-lock recheck, the second
+    request to acquire the lock would call the workflow against a session
+    the first request just finished mutating — e.g. `current_question` is
+    now `None` because the first request's turn completed the session —
+    and `ConversationSession.record_answer` would raise `ValueError`,
+    surfacing as an unhandled 500 instead of a clean 409. This was a real,
+    reproduced bug, not a hypothetical one; see the Career Conversation
+    race-condition investigation.
     """
     logger.info("career_conversation_answer_received", session_id=session_id)
     start = time.perf_counter()
@@ -260,6 +278,11 @@ async def submit_career_conversation_answer(
         )
 
     async with session.lock:
+        if session.status == ConversationSessionStatus.COMPLETE or session.current_question is None:
+            raise HTTPException(
+                status_code=409,
+                detail="This career conversation session has no open question to answer.",
+            )
         try:
             await workflow.submit_answer(session, payload.answer)
         except Exception as exc:

@@ -182,6 +182,7 @@ class CareerConversationWorkflow:
                     question=decision.question,
                     evidence_goal=decision.evidence_goal,
                     estimated_impact=decision.estimated_impact,
+                    assistant_response=decision.assistant_response,
                 )
             )
 

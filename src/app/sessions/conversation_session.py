@@ -19,6 +19,7 @@ this can run behind multiple worker processes or survive a restart.
 import asyncio
 import uuid
 
+from app.core.logging import get_logger
 from app.models.career_conversation import (
     ConversationExchange,
     ConversationQuestion,
@@ -26,6 +27,8 @@ from app.models.career_conversation import (
     ConversationSessionStatus,
 )
 from app.models.resume_analysis import ResumeAnalysisResult
+
+logger = get_logger(__name__)
 
 
 class ConversationSession:
@@ -92,31 +95,69 @@ class ConversationSession:
         return len(self.history)
 
     def set_current_question(self, question: ConversationQuestion) -> None:
-        """Open a new question, awaiting an answer."""
+        """Open a new question, awaiting an answer.
+
+        Logs every mutation of `current_question` (this method,
+        `record_answer`, and `complete`) at INFO with `session_id`,
+        `turn_count`, and only a *boolean* signal of what changed — never
+        the topic, question, or answer text, per the no-content-logging
+        policy — so the exact sequence of sets/clears is traceable from
+        logs alone when diagnosing a concurrency issue like the one this
+        logging was added for (see `submit_career_conversation_answer`'s
+        docstring).
+        """
+        logger.info(
+            "current_question_set",
+            session_id=self.session_id,
+            turn_count=self.turn_count,
+            replaced_open_question=self.current_question is not None,
+        )
         self.current_question = question
 
     def record_answer(self, answer: str) -> None:
         """Move the current open question, plus `answer`, into history.
 
-        Raises `ValueError` if there is no open question to answer — a
-        programming error in the caller (the workflow), not a condition
-        that should ever reach here from a well-formed request, since the
-        endpoint rejects answers against a session with no open question
-        (already complete) before calling the workflow.
+        Raises `ValueError` if there is no open question to answer. This
+        should be unreachable from a well-formed, single request — the
+        endpoint checks `current_question is not None` *inside* its
+        per-session lock immediately before calling this — but a second,
+        concurrent request for the same session (e.g. a client retry
+        racing an original request that's still being processed) can
+        still reach here if that endpoint-level guard is ever weakened or
+        bypassed, so this stays as a last-resort invariant rather than
+        being removed now that the endpoint also guards against it.
         """
         if self.current_question is None:
+            logger.error(
+                "record_answer_rejected_no_open_question",
+                session_id=self.session_id,
+                turn_count=self.turn_count,
+                status=self.status,
+            )
             raise ValueError("No open question to answer.")
+        logger.info(
+            "current_question_cleared_by_answer",
+            session_id=self.session_id,
+            turn_count=self.turn_count,
+        )
         self.history.append(
             ConversationExchange(
                 topic=self.current_question.topic,
                 question=self.current_question.question,
                 answer=answer,
+                assistant_response=self.current_question.assistant_response,
             )
         )
         self.current_question = None
 
     def complete(self, reason: str) -> None:
         """Mark the session complete with the given reason, closing any open question."""
+        logger.info(
+            "current_question_cleared_by_completion",
+            session_id=self.session_id,
+            turn_count=self.turn_count,
+            had_open_question=self.current_question is not None,
+        )
         self.status = ConversationSessionStatus.COMPLETE
         self.stop_reason = reason
         self.current_question = None

@@ -12,12 +12,14 @@ export interface ConversationQuestion {
   question: string
   evidence_goal: string
   estimated_impact: EstimatedImpact
+  assistant_response: string | null
 }
 
 export interface ConversationExchange {
   topic: string
   question: string
   answer: string
+  assistant_response: string | null
 }
 
 export interface ConversationSessionState {

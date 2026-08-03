@@ -48,6 +48,17 @@ class ConversationTurnDecision(BaseModel):
     `CareerConversationWorkflow`, not silently buried in the model layer —
     see its docstring). This model only validates each field in
     isolation (e.g. `confidence`'s range).
+
+    `assistant_response` is *not* part of that should_stop/question
+    invariant, but is only ever meaningful alongside a next question —
+    answering a technical/clarifying question the candidate asked back, or
+    acknowledging a correction to something assumed earlier, both read
+    naturally as a reply that *precedes* the next question, never as a
+    substitute for one. The workflow only attaches it to the next
+    question when continuing; a value supplied alongside a stop decision
+    is intentionally not surfaced anywhere (there is no next question for
+    it to precede), so the prompt instructs the model to leave it null
+    when stopping.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -95,6 +106,16 @@ class ConversationTurnDecision(BaseModel):
             "continuing; null if stopping."
         ),
     )
+    assistant_response: str | None = Field(
+        default=None,
+        description=(
+            "A brief reply to the candidate's most recent answer — answering a "
+            "technical/clarifying question they asked back, or acknowledging a "
+            "correction to something assumed earlier — shown before the next question. "
+            "Null if stopping, or if the candidate simply answered and no reply is "
+            "warranted, which is most turns."
+        ),
+    )
 
 
 class ConversationQuestion(BaseModel):
@@ -110,16 +131,27 @@ class ConversationQuestion(BaseModel):
     estimated_impact: EstimatedImpact = Field(
         description="How much recovering this evidence would strengthen the resume's fit."
     )
+    assistant_response: str | None = Field(
+        default=None,
+        description=(
+            "A reply to the candidate's previous answer — see "
+            "ConversationTurnDecision.assistant_response — shown before this question."
+        ),
+    )
 
 
 class ConversationExchange(BaseModel):
     """One completed topic/question/answer exchange in a session's history.
 
-    Deliberately narrower than `ConversationQuestion` (topic/question/
-    answer only, no `evidence_goal`/`estimated_impact`): once a question
-    has been answered, what matters for grounding future turns is what
-    was asked and what the candidate said, not the original targeting
-    rationale — that rationale did its job when the question was posed.
+    Deliberately narrower than `ConversationQuestion` (no
+    `evidence_goal`/`estimated_impact`): once a question has been
+    answered, what matters for grounding future turns is what was asked
+    and what the candidate said, not the original targeting rationale —
+    that rationale did its job when the question was posed.
+    `assistant_response` is the exception, kept here too: it's part of
+    what was actually said in the conversation (the recruiter's own
+    words), not targeting rationale, so it belongs in the transcript same
+    as the question and answer do.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -127,6 +159,10 @@ class ConversationExchange(BaseModel):
     topic: str = Field(description="Short label for the evidence gap this exchange targeted.")
     question: str = Field(description="The conversational question that was asked.")
     answer: str = Field(description="The candidate's answer to that question.")
+    assistant_response: str | None = Field(
+        default=None,
+        description="A reply from the recruiter shown before this question, if any.",
+    )
 
 
 class ConversationSessionState(BaseModel):

@@ -8,6 +8,8 @@ module's docstring for why the generic `MockGateway` can't exercise this
 endpoint's happy path.
 """
 
+import asyncio
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -57,10 +59,12 @@ async def api_client_factory():
     """
     clients: list[AsyncClient] = []
 
-    async def _factory(decisions: list[ConversationTurnDecision]) -> AsyncClient:
+    async def _factory(
+        decisions: list[ConversationTurnDecision], delay_seconds: float = 0
+    ) -> AsyncClient:
         settings = Settings(log_json=False, gemini_api_key="test-gemini-api-key")
         app = create_app(settings)
-        gateway = FakeGateway(decisions)
+        gateway = FakeGateway(decisions, delay_seconds=delay_seconds)
         app.dependency_overrides[get_career_conversation_workflow] = lambda: (
             CareerConversationWorkflow(CareerConversationPromptBuilder(), gateway)
         )
@@ -120,6 +124,45 @@ async def test_answer_advances_the_conversation(api_client_factory) -> None:
     assert body["current_question"] is not None
 
 
+async def test_assistant_response_surfaces_in_the_response_body(api_client_factory) -> None:
+    client = await api_client_factory(
+        [
+            _continue_decision(confidence=30),
+            _continue_decision(
+                confidence=50,
+                assistant_response="Sure — I mean the whole platform, not just your team's part.",
+            ),
+            _stop_decision(confidence=95, reason="No gaps remain."),
+        ]
+    )
+    start_response = await client.post("/v1/career-conversation", json=_START_PAYLOAD)
+    assert start_response.json()["current_question"]["assistant_response"] is None
+    session_id = start_response.json()["session_id"]
+
+    response = await client.post(
+        f"/v1/career-conversation/{session_id}/answer",
+        json={"answer": "Wait, do you mean the whole platform or just my team's part?"},
+    )
+
+    body = response.json()
+    assert (
+        body["current_question"]["assistant_response"]
+        == "Sure — I mean the whole platform, not just your team's part."
+    )
+
+    # Once that question is answered too, the assistant_response should
+    # travel with it into history.
+    second = await client.post(
+        f"/v1/career-conversation/{session_id}/answer",
+        json={"answer": "Got it, the whole platform."},
+    )
+    second_body = second.json()
+    assert (
+        second_body["history"][-1]["assistant_response"]
+        == "Sure — I mean the whole platform, not just your team's part."
+    )
+
+
 async def test_answer_completes_when_llm_signals_stop(api_client_factory) -> None:
     client = await api_client_factory(
         [
@@ -171,3 +214,47 @@ async def test_answer_after_completion_returns_409(api_client_factory) -> None:
     )
 
     assert response.status_code == 409
+
+
+async def test_concurrent_answers_for_same_question_return_409_not_500(api_client_factory) -> None:
+    """Regression test for a real, reproduced race condition.
+
+    Two requests answering the *same currently-open* question
+    concurrently (e.g. a client retry racing an original request still
+    being processed) must not crash. Both pass the endpoint's fast-path
+    "not already complete" check before either finishes — the in-lock
+    recheck (see `submit_career_conversation_answer`'s docstring) is what
+    turns the loser into a clean `409` instead of an unhandled `500` from
+    `ConversationSession.record_answer` finding `current_question` already
+    cleared by the winner. `delay_seconds` on the fake gateway is what
+    reliably reproduces the interleaving — see `FakeGateway`'s docstring.
+    """
+    client = await api_client_factory(
+        [
+            _continue_decision(confidence=30),
+            _stop_decision(confidence=95, reason="No gaps remain."),
+        ],
+        delay_seconds=0.05,
+    )
+    start_response = await client.post("/v1/career-conversation", json=_START_PAYLOAD)
+    session_id = start_response.json()["session_id"]
+    assert start_response.json()["status"] == "in_progress"
+
+    answer_payload = {"answer": "I used React for the internal dashboard."}
+
+    async def submit():
+        return await client.post(
+            f"/v1/career-conversation/{session_id}/answer", json=answer_payload
+        )
+
+    results = await asyncio.gather(submit(), submit())
+
+    statuses = sorted(result.status_code for result in results)
+    assert statuses == [200, 409]
+
+    # And the session itself is left in a consistent, valid end state --
+    # not corrupted by the race.
+    final = await client.get(f"/v1/career-conversation/{session_id}")
+    body = final.json()
+    assert body["status"] == "complete"
+    assert len(body["history"]) == 1
