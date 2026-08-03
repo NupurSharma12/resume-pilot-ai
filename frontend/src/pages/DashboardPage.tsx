@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import TopHeader from '../components/TopHeader'
+import InputSection from '../components/InputSection'
+import type { ResumeInputValue } from '../components/ResumeInput'
+import type { JobDescriptionInputValue } from '../components/JobDescriptionInput'
 import CandidateHeroCard from '../components/CandidateHeroCard'
 import MetricCard from '../components/MetricCard'
 import AnalysisPanel from '../components/AnalysisPanel'
@@ -9,7 +12,6 @@ import AnalysisErrorState from '../components/AnalysisErrorState'
 import TailoredResumeBanner from '../components/TailoredResumeBanner'
 import { getThemeForIndex } from '../data/theme'
 import { candidate, skillMatchNarratives, defaultSkillMatchNarrative } from '../data/mockData'
-import { SAMPLE_RESUME, SAMPLE_JOB_DESCRIPTION } from '../data/sampleInput'
 import { analyzeResume, ApiError } from '../lib/api'
 import type { DashboardOutletContext } from '../layouts/DashboardLayout'
 
@@ -27,6 +29,13 @@ export default function DashboardPage() {
   const [status, setStatus] = useState<AnalysisStatus>('idle')
   const [errorMessage, setErrorMessage] = useState('')
 
+  // The two real inputs. Only the resolved {text, fileName} is kept here —
+  // file objects and extraction status stay local to ResumeInput/
+  // JobDescriptionInput (see their own comments).
+  const [resume, setResume] = useState<ResumeInputValue | null>(null)
+  const [jobDescription, setJobDescription] = useState<JobDescriptionInputValue | null>(null)
+  const [isInputCollapsed, setIsInputCollapsed] = useState(false)
+
   const { overall_assessment, skill_matches } = resumeAnalysis
 
   const [selectedCategory, setSelectedCategory] = useState<string | undefined>(
@@ -39,13 +48,20 @@ export default function DashboardPage() {
     ? (skillMatchNarratives[selectedSkillMatch.category] ?? defaultSkillMatchNarrative)
     : undefined
 
+  const canAnalyze = Boolean(resume) && Boolean(jobDescription)
+
   async function handleAnalyze() {
+    if (!resume || !jobDescription) return
+
     setStatus('loading')
     try {
-      const result = await analyzeResume(SAMPLE_RESUME, SAMPLE_JOB_DESCRIPTION)
+      const result = await analyzeResume(resume.text, jobDescription.text)
       setResumeAnalysis(result)
       setSelectedCategory(result.skill_matches[0]?.category)
       setStatus('success')
+      // Only collapses on success (not immediately on click), per spec —
+      // an error or an in-flight request leaves the inputs as the user left them.
+      setIsInputCollapsed(true)
     } catch (err) {
       setErrorMessage(
         err instanceof ApiError ? err.message : 'An unexpected error occurred. Please try again.',
@@ -59,11 +75,21 @@ export default function DashboardPage() {
       <TopHeader
         title="Resume Analysis Dashboard"
         subtitle="AI-powered recruiter insights and hiring recommendations"
-        onAnalyze={handleAnalyze}
-        isAnalyzing={status === 'loading'}
       />
 
       <div className="space-y-8 p-8">
+        <InputSection
+          resume={resume}
+          jobDescription={jobDescription}
+          onResumeChange={setResume}
+          onJobDescriptionChange={setJobDescription}
+          isCollapsed={isInputCollapsed}
+          onExpand={() => setIsInputCollapsed(false)}
+          onAnalyze={handleAnalyze}
+          canAnalyze={canAnalyze}
+          isAnalyzing={status === 'loading'}
+        />
+
         {status === 'loading' && <AnalyzingState />}
 
         {status === 'error' && (
