@@ -2,6 +2,7 @@ import { Building2, CheckCircle2 } from 'lucide-react'
 import CircularProgress from './CircularProgress'
 import StarRating from './StarRating'
 import CategoryScoreRow from './CategoryScoreRow'
+import ExecutiveSummary from './ExecutiveSummary'
 import { getThemeForIndex } from '../data/theme'
 import type { Candidate, OverallAssessment, SkillMatch } from '../data/types'
 
@@ -9,12 +10,14 @@ interface CandidateHeroCardProps {
   candidate: Candidate
   overallAssessment: OverallAssessment
   skillMatches: SkillMatch[]
+  executiveSummary: string[]
 }
 
 export default function CandidateHeroCard({
   candidate,
   overallAssessment,
   skillMatches,
+  executiveSummary,
 }: CandidateHeroCardProps) {
   return (
     <div className="grid grid-cols-[280px_1fr_260px] overflow-hidden rounded-2xl border border-gray-200 bg-white">
@@ -51,7 +54,7 @@ export default function CandidateHeroCard({
           {candidate.company} · {candidate.yearsExperience} Years Experience
         </p>
 
-        <p className="mt-4 leading-relaxed text-gray-600">{overallAssessment.summary}</p>
+        <ExecutiveSummary bullets={executiveSummary} />
       </div>
 
       <div className="border-l border-gray-200 p-8">

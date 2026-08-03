@@ -5,6 +5,7 @@ import InputSection from '../components/InputSection'
 import type { ResumeInputValue } from '../components/ResumeInput'
 import type { JobDescriptionInputValue } from '../components/JobDescriptionInput'
 import CandidateHeroCard from '../components/CandidateHeroCard'
+import WhyThisScoreCard from '../components/WhyThisScoreCard'
 import MetricCard from '../components/MetricCard'
 import AnalysisPanel from '../components/AnalysisPanel'
 import AnalyzingState from '../components/AnalyzingState'
@@ -12,6 +13,7 @@ import AnalysisErrorState from '../components/AnalysisErrorState'
 import TailoredResumeBanner from '../components/TailoredResumeBanner'
 import { getThemeForIndex } from '../data/theme'
 import { candidate, skillMatchNarratives, defaultSkillMatchNarrative } from '../data/mockData'
+import { buildExecutiveSummary, deriveTopStrengths, deriveTopRisks } from '../lib/insights'
 import { analyzeResume, ApiError } from '../lib/api'
 import type { DashboardOutletContext } from '../layouts/DashboardLayout'
 
@@ -47,6 +49,12 @@ export default function DashboardPage() {
   const selectedNarrative = selectedSkillMatch
     ? (skillMatchNarratives[selectedSkillMatch.category] ?? defaultSkillMatchNarrative)
     : undefined
+
+  // Derived, read-only insights — pure functions of `resumeAnalysis`, no
+  // extra state. Recomputed each render; cheap given the small arrays involved.
+  const executiveSummary = buildExecutiveSummary(resumeAnalysis)
+  const topStrengths = deriveTopStrengths(resumeAnalysis)
+  const topRisks = deriveTopRisks(resumeAnalysis)
 
   const canAnalyze = Boolean(resume) && Boolean(jobDescription)
 
@@ -102,7 +110,10 @@ export default function DashboardPage() {
               candidate={candidate}
               overallAssessment={overall_assessment}
               skillMatches={skill_matches}
+              executiveSummary={executiveSummary}
             />
+
+            <WhyThisScoreCard topStrengths={topStrengths} topRisks={topRisks} />
 
             <div className="grid grid-cols-5 gap-5">
               {skill_matches.map((skillMatch, index) => (
