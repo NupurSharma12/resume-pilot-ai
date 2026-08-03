@@ -5,6 +5,7 @@ import ResumePage from './pages/ResumePage'
 import JobDescriptionPage from './pages/JobDescriptionPage'
 import HistoryPage from './pages/HistoryPage'
 import SettingsPage from './pages/SettingsPage'
+import CareerConversationPage from './pages/CareerConversationPage'
 
 function App() {
   return (
@@ -15,6 +16,7 @@ function App() {
         <Route path="/job-description" element={<JobDescriptionPage />} />
         <Route path="/history" element={<HistoryPage />} />
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/career-conversation" element={<CareerConversationPage />} />
       </Route>
     </Routes>
   )

@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging, get_logger
+from app.sessions.conversation_session import ConversationSessionStore
 
 
 @asynccontextmanager
@@ -28,6 +29,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = settings
+    # Process-lifetime singleton, unlike everything else attached to
+    # `app.state`: Career Conversation sessions must persist across the
+    # start -> answer -> answer -> ... request sequence, so this store is
+    # constructed once here rather than per-request (see
+    # `app.sessions.conversation_session`'s module docstring).
+    app.state.conversation_session_store = ConversationSessionStore()
 
     app.add_middleware(
         CORSMiddleware,

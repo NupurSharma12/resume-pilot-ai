@@ -8,6 +8,7 @@ import MetricCard from '../components/MetricCard'
 import AnalysisPanel from '../components/AnalysisPanel'
 import AnalyzingState from '../components/AnalyzingState'
 import AnalysisErrorState from '../components/AnalysisErrorState'
+import CareerConversationBanner from '../components/CareerConversationBanner'
 import TailoredResumeBanner from '../components/TailoredResumeBanner'
 import { getThemeForIndex } from '../data/theme'
 import { candidate, skillMatchNarratives, defaultSkillMatchNarrative } from '../data/mockData'
@@ -175,6 +176,8 @@ export default function DashboardPage() {
             )}
           </div>
         )}
+
+        {hasResult && <CareerConversationBanner />}
 
         <TailoredResumeBanner />
       </div>
