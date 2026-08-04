@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging, get_logger
+from app.gateways.llm.factory import build_llm_gateway
 from app.sessions.conversation_session import ConversationSessionStore
 
 
@@ -14,6 +15,16 @@ from app.sessions.conversation_session import ConversationSessionStore
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger = get_logger(__name__)
     logger.info("app_startup", environment=app.state.settings.environment)
+    # Constructed and immediately discarded: this call's only purpose is
+    # to fail the app at startup (not on whichever request happens to
+    # need it first) if a provider named in RESUMEPILOT_*_PROVIDER is
+    # missing its required credentials, and to emit
+    # "llm_provider_chain_configured" once at boot, showing exactly which
+    # providers this process resolved from its environment (see
+    # gateways/llm/factory.py's docstring). Every request still builds
+    # its own gateway chain via the same function — this doesn't cache or
+    # share the chain across requests.
+    build_llm_gateway(app.state.settings)
     yield
     logger.info("app_shutdown")
 
