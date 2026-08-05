@@ -2,6 +2,7 @@ import type { ResumeAnalysisResult } from './data/types'
 import type { ResumeInputValue } from './components/ResumeInput'
 import type { JobDescriptionInputValue } from './components/JobDescriptionInput'
 import type { ConversationSessionState } from './data/careerConversationTypes'
+import type { TailorResumeResult } from './data/tailoringTypes'
 import { RESUME_SESSION_VERSION, type PersistedResumeSession } from './session/resumeSessionTypes'
 
 export const fixtureResume: ResumeInputValue = {
@@ -41,6 +42,60 @@ export const fixtureSession: ConversationSessionState = {
     assistant_response: null,
   },
   stop_reason: null,
+}
+
+export const fixtureCompletedSession: ConversationSessionState = {
+  session_id: 'session-123',
+  status: 'complete',
+  history: [
+    {
+      topic: 'Leadership',
+      question: 'Tell me about a time you led a project.',
+      answer: 'I led the migration of our dashboard from Angular to React.',
+      assistant_response: null,
+    },
+  ],
+  current_question: null,
+  stop_reason: 'Enough evidence recovered.',
+}
+
+export const fixtureTailorResult: TailorResumeResult = {
+  tailoring_plan: {
+    changes: [
+      {
+        section: 'Summary',
+        action: 'rewrite',
+        reason: 'Recent backend engineering work is missing.',
+        evidence_ids: ['conversation-turn-1'],
+      },
+    ],
+  },
+  tailored_resume: {
+    sections: [
+      {
+        heading: 'Summary',
+        bullets: [
+          {
+            text: 'Led the migration of the dashboard from Angular to React.',
+            supporting_evidence_ids: ['conversation-turn-1'],
+          },
+        ],
+      },
+    ],
+  },
+  validation_report: {
+    total_bullets: 2,
+    accepted_count: 1,
+    rejected_count: 1,
+    rejected_bullets: [
+      {
+        section: 'Summary',
+        text: 'Reduced infrastructure costs by 40% using Kubernetes.',
+        reason: 'Contains term(s) not present in cited evidence: Kubernetes.',
+      },
+    ],
+    passed: false,
+  },
 }
 
 export function fixturePersistedSession(

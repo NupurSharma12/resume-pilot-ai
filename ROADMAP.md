@@ -42,6 +42,10 @@ AI Career Coach
 
 ✅ Sprint 6 – Dashboard & Career Conversation
 
+✅ Sprint 7 – Multi-LLM Resilience (provider-chain failover + OpenRouter per-model fallback)
+
+✅ Sprint 12 – Evidence-Based Tailoring Engine
+
 # Phase 1 — Resume Analysis
 
 ✅ Resume Upload
@@ -54,18 +58,19 @@ AI Career Coach
 
 # Phase 2 — Resume Intelligence
 
-⏳ Evidence Recovery
+✅ Evidence Recovery (Career Conversation)
 ⏳ Evidence Prioritization
 ⏳ Missing Experience Discovery
 ⏳ Conservative Scoring
-⏳ Multi-LLM Reliability
+✅ Multi-LLM Reliability (provider chain + OpenRouter per-model fallback)
 
 # Phase 3 — Tailored Resume
-Resume Generation
-Bullet Rewrite
-Evidence-backed Improvements
-Traceability
-Multiple Resume Versions
+
+✅ Resume Generation (Evidence-Based Tailoring Engine — see `docs/features/tailoring-engine.md`)
+✅ Bullet Rewrite
+✅ Evidence-backed Improvements
+✅ Traceability (every bullet cites its supporting evidence ids; Validation Report shows what was rejected and why)
+⏳ Multiple Resume Versions
 
 # Phase 4 — Interview Coach
 Behavioral Interview

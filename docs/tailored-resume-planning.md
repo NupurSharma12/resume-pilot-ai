@@ -1,3 +1,7 @@
+> **Superseded by [`docs/features/tailoring-engine.md`](features/tailoring-engine.md),
+> which documents the pipeline as actually implemented (Sprint 12). Kept
+> here for historical context only.**
+
 # Tailored Resume - Planning
 
 ## Goal

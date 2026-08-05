@@ -80,7 +80,7 @@ Generates
 
 ---
 
-## Career Conversation (NEW)
+## Career Conversation
 
 Instead of asking generic interview questions, ResumePilotAI starts an adaptive recruiter-style conversation.
 
@@ -131,6 +131,21 @@ The AI can now:
 - stop automatically when enough evidence has been collected
 
 This makes the conversation feel much closer to speaking with an experienced recruiter than filling out a questionnaire.
+
+---
+
+## Tailored Resume (NEW)
+
+`POST /v1/tailor-resume` runs the Evidence-Based Tailoring Engine — **not** an AI resume writer. Every change it makes must be traceable to something that already exists: the original resume, the resume analysis, or the Career Conversation transcript. It never invents experience, technologies, dates, responsibilities, achievements, or metrics.
+
+The pipeline runs four stages, in order:
+
+1. **Evidence Store** — combines the original resume, the resume analysis, and the Career Conversation transcript into one flat catalog of citable facts. No rewriting happens here; this is the "facts database."
+2. **Tailoring Planner** — decides *what* should change, *why*, and *which evidence* supports it. It does not write any resume text.
+3. **Resume Rewrite Engine** — follows the plan and writes the actual bullets, citing which evidence each one is based on. It may only improve wording, ordering, emphasis, and clarity.
+4. **Validation** — checks every rewritten bullet against the evidence it cited. Anything unsupported, or that cites unknown/no evidence, is rejected and reported — never silently kept.
+
+The response includes the tailored resume, the plan it was built from, and a validation report listing exactly what was accepted and what was rejected, and why. See `docs/features/tailoring-engine.md` for the full pipeline design.
 
 ---
 
@@ -231,6 +246,7 @@ app/
     api/
     agents/
     core/
+    evidence/
     gateways/
     ingestion/
     models/
@@ -341,21 +357,27 @@ Career Conversation
 
 Adaptive recruiter-style conversations for evidence recovery.
 
-## 🚧 Sprint 7
+## ✅ Sprint 7
 Multi-LLM Failover
 
-Automatic fallback across multiple LLM providers.
+Automatic fallback across multiple LLM providers, including per-model
+fallback within OpenRouter's free-tier catalog (Gemma → Qwen → Llama →
+DeepSeek). See `docs/features/multi-llm-resilience.md`.
 
-## 🚧 Sprint 8
-Tailored Resume Generation
+## ✅ Sprint 8
+Evidence-Based Tailoring Engine
 
-Generate a recruiter-ready resume using:
+Generates a recruiter-ready resume using:
 
 - Resume
 - JD
-- Evidence recovered during conversation
+- Resume Analysis
+- Evidence recovered during the Career Conversation
 
-without inventing experience.
+without inventing experience, technologies, dates, responsibilities,
+achievements, or metrics. Every change is planned before it's written,
+and every written bullet is validated against its cited evidence before
+it's returned — see `docs/features/tailoring-engine.md`.
 
 ## 🚧 Sprint 9
 Interview Coach
