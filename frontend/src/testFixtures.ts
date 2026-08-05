@@ -108,6 +108,8 @@ export function fixturePersistedSession(
     resumeAnalysis: fixtureResumeAnalysis,
     status: 'success',
     activeCareerConversationSessionId: null,
+    careerConversationStatus: null,
+    tailoredResumeResult: null,
     ...overrides,
   }
 }

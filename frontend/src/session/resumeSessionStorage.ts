@@ -13,15 +13,24 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 // Deliberately permissive about the *content* of resume/jobDescription/
-// resumeAnalysis (those are large, evolving shapes already typed elsewhere —
-// re-validating every field here would just be a second, driftable copy of
-// those types) but strict about the envelope: version, status enum, and the
-// session id's type. Anything else is treated as corrupt/unsupported and
-// discarded rather than risking a crash from acting on it.
+// resumeAnalysis/tailoredResumeResult (those are large, evolving shapes
+// already typed elsewhere — re-validating every field here would just be a
+// second, driftable copy of those types) but strict about the envelope:
+// version, status enums, and the session id's type. Anything else is
+// treated as corrupt/unsupported and discarded rather than risking a crash
+// from acting on it. A payload saved before `careerConversationStatus`/
+// `tailoredResumeResult` existed is "unsupported" by the same rule (missing
+// required keys) — cleared and re-initialized empty, the same graceful path
+// already used for any other stale/malformed session, not a special case.
 function isSupportedPersistedSession(value: unknown): value is PersistedResumeSession {
   if (!isPlainObject(value)) return false
   if (value.version !== RESUME_SESSION_VERSION) return false
-  if (!('resume' in value) || !('jobDescription' in value) || !('resumeAnalysis' in value)) {
+  if (
+    !('resume' in value) ||
+    !('jobDescription' in value) ||
+    !('resumeAnalysis' in value) ||
+    !('tailoredResumeResult' in value)
+  ) {
     return false
   }
   if (value.status !== 'idle' && value.status !== 'success' && value.status !== 'error') {
@@ -30,6 +39,13 @@ function isSupportedPersistedSession(value: unknown): value is PersistedResumeSe
   if (
     value.activeCareerConversationSessionId !== null &&
     typeof value.activeCareerConversationSessionId !== 'string'
+  ) {
+    return false
+  }
+  if (
+    value.careerConversationStatus !== null &&
+    value.careerConversationStatus !== 'in_progress' &&
+    value.careerConversationStatus !== 'complete'
   ) {
     return false
   }
