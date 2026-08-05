@@ -204,7 +204,12 @@ Implemented providers
 
 - Google Gemini (native structured output via JSON Schema)
 - OpenRouter (JSON-object mode + prompt-embedded schema; free models only
-  by default, model configurable via `RESUMEPILOT_OPENROUTER_MODEL`)
+  by default, an ordered fallback list configurable via
+  `RESUMEPILOT_OPENROUTER_MODELS` — `OpenRouterGateway` tries each model in
+  turn internally on a retryable failure (timeout, 429, 5xx, empty
+  response, malformed JSON, schema-validation failure) before the
+  "openrouter" provider itself is considered failed; see
+  `docs/features/multi-llm-resilience.md`)
 - Mock (deterministic, no network — a valid chain tier on its own, e.g.
   for local dev/tests)
 
