@@ -70,16 +70,31 @@ class Settings(BaseSettings):
             "OpenRouterGateway.__init__."
         ),
     )
-    openrouter_model: str = Field(
-        default="google/gemma-4-26b-a4b-it:free",
+    openrouter_models: list[str] = Field(
+        default_factory=lambda: [
+            "google/gemma-4-26b-a4b-it:free",
+            "qwen/qwen3-30b-a3b:free",
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "deepseek/deepseek-chat:free",
+        ],
         description=(
-            "OpenRouter model identifier to use — a free model by default. OpenRouter's "
-            "free-tier catalog changes over time (models get retired); if this starts "
-            "returning HTTP 404, check https://openrouter.ai/api/v1/models for a current "
-            "':free'-suffixed replacement. Avoid *reasoning* models (e.g. openai/gpt-oss-"
-            "20b:free): one was observed, under this app's long structured-output prompts, "
-            "returning finish_reason=stop with an empty/null message.content — a real "
-            "provider/model quirk generate_structured has no way to work around."
+            "Ordered list of OpenRouter model identifiers to try, free models by default. "
+            "OpenRouterGateway attempts them in order on every call, falling back to the "
+            "next one on a timeout, HTTP 429, HTTP 5xx, an empty response, malformed JSON, "
+            "or a schema-validation failure (see OpenRouterGateway's module docstring) — "
+            "only once every model in this list has failed does the 'openrouter' leg of "
+            "the provider chain itself fail, letting GatewayChain fall back to the next "
+            "configured provider. Does NOT retry across models on an authentication "
+            "failure, a bad request, or an invalid API key (HTTP 401/403/400): those fail "
+            "identically against every model, so the first one fails fast instead of "
+            "burning through the rest of the list. OpenRouter's free-tier catalog changes "
+            "over time (models get retired); if a model starts returning HTTP 404, check "
+            "https://openrouter.ai/api/v1/models for a current ':free'-suffixed "
+            "replacement. Avoid *reasoning* models (e.g. openai/gpt-oss-20b:free): one was "
+            "observed, under this app's long structured-output prompts, returning "
+            "finish_reason=stop with an empty/null message.content — exactly the failure "
+            "mode this list-based fallback exists to route around, but still wasted "
+            "latency on every call if it's first in the list."
         ),
     )
 
