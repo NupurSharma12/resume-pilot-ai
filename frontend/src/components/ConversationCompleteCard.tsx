@@ -1,5 +1,5 @@
 import { CheckCircle2, Wand2 } from 'lucide-react'
-import Badge from './Badge'
+import { useNavigate } from 'react-router-dom'
 import Button from './Button'
 
 interface ConversationCompleteCardProps {
@@ -7,15 +7,17 @@ interface ConversationCompleteCardProps {
   questionsAnswered: number
 }
 
-// The completion state's "what's next" half deliberately mirrors
-// TailoredResumeBanner's exact layout (icon tile, COMING SOON badge,
-// disabled outline button) — Tailored Resume is still the same disabled
-// placeholder everywhere it appears, this just also appears here as the
-// natural next step after a completed conversation.
+// The completion state's "what's next" half is the one real, enabled
+// entry point into the Tailoring Engine (TailoredResumeBanner on the
+// Dashboard is still a disabled "coming soon" placeholder — the backend
+// requires a Career Conversation session to tailor against, so this is
+// the point in the flow where that's actually satisfied).
 export default function ConversationCompleteCard({
   stopReason,
   questionsAnswered,
 }: ConversationCompleteCardProps) {
+  const navigate = useNavigate()
+
   return (
     <div className="animate-panel-fade overflow-hidden rounded-2xl border border-gray-200 bg-white">
       <div className="flex flex-col items-center gap-4 px-8 py-12 text-center">
@@ -39,17 +41,18 @@ export default function ConversationCompleteCard({
             <Wand2 size={22} />
           </div>
           <div>
-            <div className="flex items-center gap-2.5">
-              <h3 className="font-semibold text-gray-900">Tailored Resume Generator</h3>
-              <Badge variant="amber">COMING SOON</Badge>
-            </div>
+            <h3 className="font-semibold text-gray-900">Tailored Resume Generator</h3>
             <p className="mt-1 text-sm text-gray-500">
-              Use what you just shared to generate an AI-optimized resume for this job.
+              Use what you just shared to generate an evidence-backed resume for this job.
             </p>
           </div>
         </div>
 
-        <Button variant="outline" icon={<Wand2 size={16} />} disabled>
+        <Button
+          variant="outline"
+          icon={<Wand2 size={16} />}
+          onClick={() => navigate('/tailored-resume')}
+        >
           Generate Tailored Resume
         </Button>
       </div>
