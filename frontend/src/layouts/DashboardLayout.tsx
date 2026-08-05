@@ -5,8 +5,10 @@ import HelpButton from '../components/HelpButton'
 import type { ResumeAnalysisResult } from '../data/types'
 import type { ResumeInputValue } from '../components/ResumeInput'
 import type { JobDescriptionInputValue } from '../components/JobDescriptionInput'
+import { useResumeSession } from '../session/ResumeSessionContext'
+import type { AnalysisStatus } from '../session/resumeSessionTypes'
 
-export type AnalysisStatus = 'idle' | 'loading' | 'success' | 'error'
+export type { AnalysisStatus }
 
 export interface DashboardOutletContext {
   resumeAnalysis: ResumeAnalysisResult | null
@@ -23,27 +25,25 @@ export interface DashboardOutletContext {
   setIsInputCollapsed: (collapsed: boolean) => void
 }
 
+// `resume`/`jobDescription`/`resumeAnalysis`/`status` are owned by
+// `ResumeSessionProvider` (see session/ResumeSessionContext.tsx) so they
+// survive a full reload, not just SPA navigation -- that's the whole reason
+// this layout no longer holds them in its own `useState`. `errorMessage`
+// and `isInputCollapsed` stay local: they're transient UI state (an
+// in-flight error's text, whether a panel is expanded) that has no business
+// surviving a reload, and re-deriving them from scratch on remount is
+// exactly the right behavior, not a bug.
 export default function DashboardLayout() {
-  // Owned here, not in DashboardPage: the sidebar's mini summary card, the
-  // Dashboard/Resume/Job Description routes all need the same upload and
-  // analysis state, so there must be exactly one instance of each, shared
-  // via Outlet context below, not several components each holding their
-  // own copy that could drift apart.
-  //
-  // `resumeAnalysis` starts `null` — there is no mock fallback — so the
-  // app's initial state is genuinely "nothing analyzed yet" rather than a
-  // pre-filled dashboard.
-  //
-  // `status`/`errorMessage`/`isInputCollapsed` live here (not in
-  // DashboardPage) for the same reason: DashboardPage unmounts whenever
-  // the user navigates to /resume, /job-description, /history, or
-  // /settings, so anything that needs to survive that navigation — e.g.
-  // "the dashboard should still show results when you come back" — can't
-  // be local page state.
-  const [resumeAnalysis, setResumeAnalysis] = useState<ResumeAnalysisResult | null>(null)
-  const [resume, setResume] = useState<ResumeInputValue | null>(null)
-  const [jobDescription, setJobDescription] = useState<JobDescriptionInputValue | null>(null)
-  const [status, setStatus] = useState<AnalysisStatus>('idle')
+  const {
+    resumeAnalysis,
+    setResumeAnalysis,
+    resume,
+    setResume,
+    jobDescription,
+    setJobDescription,
+    status,
+    setStatus,
+  } = useResumeSession()
   const [errorMessage, setErrorMessage] = useState('')
   const [isInputCollapsed, setIsInputCollapsed] = useState(false)
 

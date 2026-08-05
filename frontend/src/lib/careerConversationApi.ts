@@ -38,6 +38,33 @@ export async function startCareerConversation(
   return (await response.json()) as ConversationSessionState
 }
 
+// Calls the backend's GET /v1/career-conversation/{sessionId} to fetch an
+// existing session's current state without mutating it -- used to restore a
+// conversation after a reload/deep link instead of starting a new one. Safe
+// to call repeatedly (the endpoint is a pure read; see its docstring).
+// Throws `ApiError` on a 404 (unknown/expired session_id) the same as any
+// other non-2xx response -- callers distinguish "stale session" from other
+// failures via `err.message` or by checking `response.status` themselves if
+// they need to (see CareerConversationPage's restore logic).
+export async function getCareerConversation(sessionId: string): Promise<ConversationSessionState> {
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}/v1/career-conversation/${sessionId}`)
+  } catch {
+    throw new ApiError('Could not reach the conversation service. Is the backend running?')
+  }
+
+  if (response.status === 404) {
+    throw new ApiError('This conversation session no longer exists.', { cause: 'not_found' })
+  }
+
+  if (!response.ok) {
+    throw new ApiError(`Restoring the conversation failed (HTTP ${response.status}).`)
+  }
+
+  return (await response.json()) as ConversationSessionState
+}
+
 // Calls the backend's POST /v1/career-conversation/{sessionId}/answer and
 // returns the updated session — either the next question, or a completed
 // session with no current question.

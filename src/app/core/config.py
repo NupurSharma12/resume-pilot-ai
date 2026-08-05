@@ -71,8 +71,16 @@ class Settings(BaseSettings):
         ),
     )
     openrouter_model: str = Field(
-        default="meta-llama/llama-3.3-70b-instruct:free",
-        description="OpenRouter model identifier to use — a free model by default.",
+        default="google/gemma-4-26b-a4b-it:free",
+        description=(
+            "OpenRouter model identifier to use — a free model by default. OpenRouter's "
+            "free-tier catalog changes over time (models get retired); if this starts "
+            "returning HTTP 404, check https://openrouter.ai/api/v1/models for a current "
+            "':free'-suffixed replacement. Avoid *reasoning* models (e.g. openai/gpt-oss-"
+            "20b:free): one was observed, under this app's long structured-output prompts, "
+            "returning finish_reason=stop with an empty/null message.content — a real "
+            "provider/model quirk generate_structured has no way to work around."
+        ),
     )
 
 

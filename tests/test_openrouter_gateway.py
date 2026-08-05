@@ -24,8 +24,11 @@ class _DummyResult(BaseModel):
     count: int
 
 
-def _make_gateway(handler) -> OpenRouterGateway:
-    settings = Settings(openrouter_api_key="test-openrouter-key")
+def _make_gateway(handler, model: str | None = None) -> OpenRouterGateway:
+    settings = Settings(
+        openrouter_api_key="test-openrouter-key",
+        **({"openrouter_model": model} if model else {}),
+    )
     gateway = OpenRouterGateway(settings)
     gateway._client = httpx.AsyncClient(
         transport=httpx.MockTransport(handler), base_url="https://openrouter.ai/api/v1"
@@ -45,7 +48,12 @@ def _request() -> LLMRequest:
 async def test_generate_success_parses_response_and_usage() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        assert body["model"] == "meta-llama/llama-3.3-70b-instruct:free"
+        # Asserted against an explicit, test-owned model string (not
+        # Settings' real default) so this test never breaks just because
+        # OpenRouter retires whatever free model happens to be the
+        # project's current default — see config.py's openrouter_model
+        # docstring on why that default can go stale.
+        assert body["model"] == "test/explicit-model:free"
         assert body["messages"] == [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "Say hello."},
@@ -60,7 +68,7 @@ async def test_generate_success_parses_response_and_usage() -> None:
             },
         )
 
-    gateway = _make_gateway(handler)
+    gateway = _make_gateway(handler, model="test/explicit-model:free")
     response = await gateway.generate(_request())
 
     assert response.content == "Hello!"
