@@ -10,22 +10,35 @@ import ConversationAnswerBubble from '../components/ConversationAnswerBubble'
 import ConversationLoadingState from '../components/ConversationLoadingState'
 import ConversationErrorState from '../components/ConversationErrorState'
 import ConversationCompleteCard from '../components/ConversationCompleteCard'
-import { startCareerConversation, submitCareerConversationAnswer } from '../lib/careerConversationApi'
+import {
+  getCareerConversation,
+  startCareerConversation,
+  submitCareerConversationAnswer,
+} from '../lib/careerConversationApi'
 import { ApiError } from '../lib/api'
+import { useResumeSession } from '../session/ResumeSessionContext'
 import type { ConversationSessionState } from '../data/careerConversationTypes'
 import type { DashboardOutletContext } from '../layouts/DashboardLayout'
 
 type ConversationApiStatus = 'starting' | 'ready' | 'submitting' | 'error'
-type FailedAction = 'start' | 'submit'
+// 'init' covers both "starting a brand new conversation" and "restoring an
+// existing one" -- both are retried the same way (see handleRetry): just
+// call `initSession` again.
+type FailedAction = 'init' | 'submit'
 
 export default function CareerConversationPage() {
   const navigate = useNavigate()
   const { resumeAnalysis, resume, jobDescription } = useOutletContext<DashboardOutletContext>()
+  const {
+    hydrationStatus,
+    activeCareerConversationSessionId,
+    setActiveCareerConversationSessionId,
+  } = useResumeSession()
 
   const [session, setSession] = useState<ConversationSessionState | null>(null)
   const [apiStatus, setApiStatus] = useState<ConversationApiStatus>('starting')
   const [errorMessage, setErrorMessage] = useState('')
-  const [failedAction, setFailedAction] = useState<FailedAction>('start')
+  const [failedAction, setFailedAction] = useState<FailedAction>('init')
   const [answer, setAnswer] = useState('')
 
   const activeSectionRef = useRef<HTMLDivElement>(null)
@@ -33,7 +46,11 @@ export default function CareerConversationPage() {
   // A conversation can only be grounded in a completed analysis — this
   // route is only ever linked to from the Dashboard's CTA once one
   // exists (see CareerConversationBanner), but a direct/refreshed visit
-  // could still land here with nothing to ground it in.
+  // could still land here with nothing to ground it in. Only meaningful
+  // once hydration has resolved -- before that, `resume`/`jobDescription`/
+  // `resumeAnalysis` are still `null` regardless of what's actually
+  // persisted, and treating that as "no context" would flash the wrong
+  // empty state on every reload (see the hydration gate in the render below).
   const hasContext = resumeAnalysis !== null && resume !== null && jobDescription !== null
 
   // Set synchronously at the top of each in-flight request and cleared
@@ -50,18 +67,51 @@ export default function CareerConversationPage() {
   // avoids sending a request that's already known to be redundant.
   const isBusyRef = useRef(false)
 
-  const startSession = useCallback(async () => {
+  // Either restores the session named by `activeCareerConversationSessionId`
+  // (a pure GET -- doesn't create anything, safe to call again on retry) or,
+  // if there isn't one, starts a brand new conversation. Whichever path
+  // succeeds, `activeCareerConversationSessionId` ends up pointing at the
+  // session now shown, so a later reload restores the same conversation
+  // instead of silently starting another one.
+  const initSession = useCallback(async () => {
     if (!resume || !jobDescription || !resumeAnalysis) return
     if (isBusyRef.current) return
     isBusyRef.current = true
     setApiStatus('starting')
     setErrorMessage('')
     try {
+      if (activeCareerConversationSessionId) {
+        try {
+          const result = await getCareerConversation(activeCareerConversationSessionId)
+          setSession(result)
+          setApiStatus('ready')
+          return
+        } catch (err) {
+          // A 404 means the backend no longer has this session (e.g. it
+          // restarted -- sessions are in-memory only). Drop the stale id
+          // so a future load doesn't keep retrying it, but don't silently
+          // start a replacement conversation here: the user's previous
+          // answers are gone, and that's worth surfacing rather than
+          // papering over. The analysis context is untouched, so the
+          // existing error UI's retry button re-runs `initSession` with
+          // no id left -- which starts a fresh conversation on demand.
+          if (err instanceof ApiError && err.cause === 'not_found') {
+            setActiveCareerConversationSessionId(null)
+            setFailedAction('init')
+            setErrorMessage('Your previous conversation could not be found. Start a new one below.')
+            setApiStatus('error')
+            return
+          }
+          throw err
+        }
+      }
+
       const result = await startCareerConversation(resume.text, jobDescription.text, resumeAnalysis)
       setSession(result)
+      setActiveCareerConversationSessionId(result.session_id)
       setApiStatus('ready')
     } catch (err) {
-      setFailedAction('start')
+      setFailedAction('init')
       setErrorMessage(
         err instanceof ApiError ? err.message : 'An unexpected error occurred. Please try again.',
       )
@@ -69,23 +119,30 @@ export default function CareerConversationPage() {
     } finally {
       isBusyRef.current = false
     }
-  }, [resume, jobDescription, resumeAnalysis])
+  }, [
+    resume,
+    jobDescription,
+    resumeAnalysis,
+    activeCareerConversationSessionId,
+    setActiveCareerConversationSessionId,
+  ])
 
-  // Creates the session exactly once per page load. `hasStartedRef` (not
-  // just an empty dependency array) is what makes this a genuine
-  // one-shot: without it, React 18 StrictMode's dev-only double effect
-  // invocation would fire a second POST /v1/career-conversation on
-  // mount, creating two sessions for one page load (the same class of
-  // bug fixed in the upload flow's remount handling — see
-  // ResumeInput/JobDescriptionInput). `startSession` is memoized via
-  // `useCallback` specifically so it can be listed here as an honest,
-  // exhaustive-deps-clean dependency.
-  const hasStartedRef = useRef(false)
+  // Initializes (restores or starts) exactly once per page load, and only
+  // once hydration has resolved -- `resume`/`jobDescription`/
+  // `resumeAnalysis`/`activeCareerConversationSessionId` aren't trustworthy
+  // before then. `hasInitializedRef` (not just an empty dependency array)
+  // is what makes this a genuine one-shot: without it, React 18
+  // StrictMode's dev-only double effect invocation would fire a second
+  // POST /v1/career-conversation (or a second GET) on mount. `initSession`
+  // is memoized via `useCallback` specifically so it can be listed here as
+  // an honest, exhaustive-deps-clean dependency.
+  const hasInitializedRef = useRef(false)
   useEffect(() => {
-    if (hasStartedRef.current) return
-    hasStartedRef.current = true
-    void startSession()
-  }, [startSession])
+    if (hydrationStatus !== 'hydrated') return
+    if (hasInitializedRef.current) return
+    hasInitializedRef.current = true
+    void initSession()
+  }, [hydrationStatus, initSession])
 
   async function handleSubmitAnswer() {
     if (!session || !answer.trim()) return
@@ -110,10 +167,10 @@ export default function CareerConversationPage() {
   }
 
   function handleRetry() {
-    if (failedAction === 'start') {
-      void startSession()
-    } else {
+    if (failedAction === 'submit') {
       void handleSubmitAnswer()
+    } else {
+      void initSession()
     }
   }
 
@@ -135,7 +192,15 @@ export default function CareerConversationPage() {
       />
 
       <div className="p-8">
-        {!hasContext ? (
+        {hydrationStatus !== 'hydrated' ? (
+          // Rehydration is a synchronous sessionStorage read (a single
+          // microtask via useEffect) -- this only ever flashes briefly, but
+          // rendering it (rather than nothing, or the "no context" empty
+          // state below) matters: showing "Complete a resume analysis
+          // first" here would be actively wrong on a reload where a
+          // completed analysis is about to be restored a moment later.
+          <ConversationLoadingState message="Restoring your session…" />
+        ) : !hasContext ? (
           <div className="flex flex-col items-center gap-4 rounded-2xl border border-dashed border-gray-300 bg-white px-8 py-16 text-center">
             <p className="text-sm text-gray-500">
               Complete a resume analysis first to start a career conversation.
