@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, act } from '@testing-library/react'
 import { ResumeSessionProvider, useResumeSession } from './ResumeSessionContext'
 import type { PersistedResumeSession, ResumeSessionStorage } from './resumeSessionTypes'
-import { fixturePersistedSession, fixtureResume } from '../testFixtures'
+import { fixturePersistedSession, fixtureResume, fixtureTailorResult } from '../testFixtures'
 
 function createFakeStorage(initial: PersistedResumeSession | null = null): ResumeSessionStorage & {
   saves: PersistedResumeSession[]
@@ -30,10 +30,18 @@ function Probe() {
       <span data-testid="resume">{session.resume?.fileName ?? 'none'}</span>
       <span data-testid="status">{session.status}</span>
       <span data-testid="sessionId">{session.activeCareerConversationSessionId ?? 'none'}</span>
+      <span data-testid="conversationStatus">{session.careerConversationStatus ?? 'none'}</span>
+      <span data-testid="tailoredResult">{session.tailoredResumeResult ? 'present' : 'none'}</span>
       <button onClick={() => session.setResume(fixtureResume)}>set-resume</button>
       <button onClick={() => session.setStatus('loading')}>set-loading</button>
       <button onClick={() => session.setActiveCareerConversationSessionId('conv-1')}>
         set-session-id
+      </button>
+      <button onClick={() => session.setCareerConversationStatus('complete')}>
+        set-conversation-complete
+      </button>
+      <button onClick={() => session.setTailoredResumeResult(fixtureTailorResult)}>
+        set-tailored-result
       </button>
       <button onClick={() => session.clearSession()}>clear</button>
     </div>
@@ -143,6 +151,51 @@ describe('ResumeSessionProvider', () => {
     expect(clearSpy).toHaveBeenCalled()
     expect(screen.getByTestId('resume').textContent).toBe('none')
     expect(screen.getByTestId('sessionId').textContent).toBe('none')
+    expect(screen.getByTestId('conversationStatus').textContent).toBe('none')
+    expect(screen.getByTestId('tailoredResult').textContent).toBe('none')
+  })
+
+  it('rehydrates careerConversationStatus and tailoredResumeResult from storage', async () => {
+    const storage = createFakeStorage(
+      fixturePersistedSession({
+        careerConversationStatus: 'complete',
+        tailoredResumeResult: fixtureTailorResult,
+      }),
+    )
+    render(
+      <ResumeSessionProvider storage={storage}>
+        <Probe />
+      </ResumeSessionProvider>,
+    )
+
+    await waitFor(() => expect(screen.getByTestId('hydration').textContent).toBe('hydrated'))
+    expect(screen.getByTestId('conversationStatus').textContent).toBe('complete')
+    expect(screen.getByTestId('tailoredResult').textContent).toBe('present')
+  })
+
+  it('persists careerConversationStatus and tailoredResumeResult after they are set', async () => {
+    const storage = createFakeStorage(null)
+    render(
+      <ResumeSessionProvider storage={storage}>
+        <Probe />
+      </ResumeSessionProvider>,
+    )
+    await waitFor(() => expect(screen.getByTestId('hydration').textContent).toBe('hydrated'))
+
+    await act(async () => {
+      screen.getByText('set-conversation-complete').click()
+    })
+    await act(async () => {
+      screen.getByText('set-tailored-result').click()
+    })
+
+    expect(screen.getByTestId('conversationStatus').textContent).toBe('complete')
+    expect(screen.getByTestId('tailoredResult').textContent).toBe('present')
+    await waitFor(() => {
+      const last = storage.saves.at(-1)
+      expect(last?.careerConversationStatus).toBe('complete')
+      expect(last?.tailoredResumeResult).toEqual(fixtureTailorResult)
+    })
   })
 
   it('throws a clear error if useResumeSession is used outside the provider', () => {

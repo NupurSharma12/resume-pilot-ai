@@ -1,22 +1,27 @@
 import { CheckCircle2, Wand2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import Button from './Button'
+import { useResumeSession } from '../session/ResumeSessionContext'
 
 interface ConversationCompleteCardProps {
   stopReason: string | null
   questionsAnswered: number
 }
 
-// The completion state's "what's next" half is the one real, enabled
-// entry point into the Tailoring Engine (TailoredResumeBanner on the
-// Dashboard is still a disabled "coming soon" placeholder — the backend
-// requires a Career Conversation session to tailor against, so this is
-// the point in the flow where that's actually satisfied).
+// The completion state's "what's next" half is a real, enabled entry
+// point into the Tailoring Engine (this card only ever renders once the
+// conversation itself is complete, so unlike TailoredResumeBanner there's
+// no "complete the conversation first" state to show here). The CTA label
+// mirrors TailoredResumeBanner's "View" vs "Generate" toggle, reading the
+// same `tailoredResumeResult` signal from ResumeSessionProvider, so it
+// can't drift out of sync with what clicking it actually leads to.
 export default function ConversationCompleteCard({
   stopReason,
   questionsAnswered,
 }: ConversationCompleteCardProps) {
   const navigate = useNavigate()
+  const { tailoredResumeResult } = useResumeSession()
+  const hasResult = tailoredResumeResult !== null
 
   return (
     <div className="animate-panel-fade overflow-hidden rounded-2xl border border-gray-200 bg-white">
@@ -43,7 +48,9 @@ export default function ConversationCompleteCard({
           <div>
             <h3 className="font-semibold text-gray-900">Tailored Resume Generator</h3>
             <p className="mt-1 text-sm text-gray-500">
-              Use what you just shared to generate an evidence-backed resume for this job.
+              {hasResult
+                ? 'Your tailored resume is ready.'
+                : 'Use what you just shared to generate an evidence-backed resume for this job.'}
             </p>
           </div>
         </div>
@@ -53,7 +60,7 @@ export default function ConversationCompleteCard({
           icon={<Wand2 size={16} />}
           onClick={() => navigate('/tailored-resume')}
         >
-          Generate Tailored Resume
+          {hasResult ? 'View Tailored Resume' : 'Generate Tailored Resume'}
         </Button>
       </div>
     </div>

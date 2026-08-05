@@ -1,6 +1,7 @@
 import type { ResumeAnalysisResult } from '../data/types'
 import type { ResumeInputValue } from '../components/ResumeInput'
 import type { JobDescriptionInputValue } from '../components/JobDescriptionInput'
+import type { TailorResumeResult } from '../data/tailoringTypes'
 
 export type AnalysisStatus = 'idle' | 'loading' | 'success' | 'error'
 
@@ -8,6 +9,15 @@ export type AnalysisStatus = 'idle' | 'loading' | 'success' | 'error'
 // an in-flight request, which cannot possibly still be in flight after a
 // reload, so it has no valid persisted meaning (see normalizeStatus).
 export type PersistedAnalysisStatus = 'idle' | 'success' | 'error'
+
+// Mirrors the backend's `ConversationSessionStatus` — kept here (not
+// imported from careerConversationTypes.ts) as a lightweight, independent
+// summary signal: the full session lives locally in CareerConversationPage,
+// this is only ever "in_progress" | "complete" | "no conversation started
+// yet", exactly the fidelity DashboardPage/ConversationCompleteCard need
+// to decide what a Tailored Resume CTA should say, without either of them
+// re-fetching the full session just to read one field.
+export type CareerConversationStatus = 'in_progress' | 'complete'
 
 export const RESUME_SESSION_VERSION = 1 as const
 
@@ -22,6 +32,8 @@ export interface PersistedResumeSession {
   resumeAnalysis: ResumeAnalysisResult | null
   status: PersistedAnalysisStatus
   activeCareerConversationSessionId: string | null
+  careerConversationStatus: CareerConversationStatus | null
+  tailoredResumeResult: TailorResumeResult | null
 }
 
 // Small and framework-independent on purpose: today's implementation reads

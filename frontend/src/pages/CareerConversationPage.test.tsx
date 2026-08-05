@@ -39,6 +39,10 @@ function makeResumeSessionValue(
     setStatus: vi.fn(),
     activeCareerConversationSessionId: null,
     setActiveCareerConversationSessionId: vi.fn(),
+    careerConversationStatus: null,
+    setCareerConversationStatus: vi.fn(),
+    tailoredResumeResult: null,
+    setTailoredResumeResult: vi.fn(),
     clearSession: vi.fn(),
     ...overrides,
   }

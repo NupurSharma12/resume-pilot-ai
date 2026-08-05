@@ -8,24 +8,17 @@ import {
   Settings,
 } from 'lucide-react'
 import { Link, useLocation } from 'react-router-dom'
-import Badge from './Badge'
 import CandidateSummaryCard from './CandidateSummaryCard'
 import { candidate } from '../data/mockData'
 import type { ResumeAnalysisResult } from '../data/types'
 
 const NAV_ITEMS = [
-  { id: 'resume', label: 'Resume', icon: FileText, path: '/resume', disabled: false },
-  {
-    id: 'job-description',
-    label: 'Job Description',
-    icon: Briefcase,
-    path: '/job-description',
-    disabled: false,
-  },
-  { id: 'dashboard', label: 'Dashboard', icon: LayoutGrid, path: '/', disabled: false },
-  { id: 'tailored-resume', label: 'Tailored Resume', icon: Wand2, path: null, disabled: true },
-  { id: 'history', label: 'History', icon: History, path: '/history', disabled: false },
-  { id: 'settings', label: 'Settings', icon: Settings, path: '/settings', disabled: false },
+  { id: 'resume', label: 'Resume', icon: FileText, path: '/resume' },
+  { id: 'job-description', label: 'Job Description', icon: Briefcase, path: '/job-description' },
+  { id: 'dashboard', label: 'Dashboard', icon: LayoutGrid, path: '/' },
+  { id: 'tailored-resume', label: 'Tailored Resume', icon: Wand2, path: '/tailored-resume' },
+  { id: 'history', label: 'History', icon: History, path: '/history' },
+  { id: 'settings', label: 'Settings', icon: Settings, path: '/settings' },
 ] as const
 
 interface SidebarProps {
@@ -47,26 +40,28 @@ export default function Sidebar({ resumeAnalysis }: SidebarProps) {
 
       <nav className="flex flex-col gap-1 px-4 py-4">
         {NAV_ITEMS.map((item) => {
-          const isActive = item.path !== null && location.pathname === item.path
+          // Tailored Resume is only ever gated on a completed analysis
+          // existing to ground it in — same prerequisite
+          // CareerConversationPage/TailoredResumePage already enforce; no
+          // other nav item is ever disabled.
+          const disabled = item.id === 'tailored-resume' && resumeAnalysis === null
+          const isActive = location.pathname === item.path
           const Icon = item.icon
-          const className = `flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium ${
+          const className = `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium ${
             isActive
               ? 'bg-indigo-50 text-indigo-600'
-              : item.disabled
+              : disabled
                 ? 'text-gray-300'
                 : 'text-gray-600 hover:bg-gray-50'
           }`
           const content = (
             <>
-              <span className="flex items-center gap-3">
-                <Icon size={18} />
-                {item.label}
-              </span>
-              {item.disabled && <Badge variant="gray">SOON</Badge>}
+              <Icon size={18} />
+              {item.label}
             </>
           )
 
-          if (item.path === null) {
+          if (disabled) {
             return (
               <div key={item.id} className={className}>
                 {content}

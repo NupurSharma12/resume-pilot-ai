@@ -33,6 +33,7 @@ export default function CareerConversationPage() {
     hydrationStatus,
     activeCareerConversationSessionId,
     setActiveCareerConversationSessionId,
+    setCareerConversationStatus,
   } = useResumeSession()
 
   const [session, setSession] = useState<ConversationSessionState | null>(null)
@@ -84,6 +85,7 @@ export default function CareerConversationPage() {
         try {
           const result = await getCareerConversation(activeCareerConversationSessionId)
           setSession(result)
+          setCareerConversationStatus(result.status)
           setApiStatus('ready')
           return
         } catch (err) {
@@ -109,6 +111,7 @@ export default function CareerConversationPage() {
       const result = await startCareerConversation(resume.text, jobDescription.text, resumeAnalysis)
       setSession(result)
       setActiveCareerConversationSessionId(result.session_id)
+      setCareerConversationStatus(result.status)
       setApiStatus('ready')
     } catch (err) {
       setFailedAction('init')
@@ -125,6 +128,7 @@ export default function CareerConversationPage() {
     resumeAnalysis,
     activeCareerConversationSessionId,
     setActiveCareerConversationSessionId,
+    setCareerConversationStatus,
   ])
 
   // Initializes (restores or starts) exactly once per page load, and only
@@ -153,6 +157,7 @@ export default function CareerConversationPage() {
     try {
       const result = await submitCareerConversationAnswer(session.session_id, answer.trim())
       setSession(result)
+      setCareerConversationStatus(result.status)
       setAnswer('')
       setApiStatus('ready')
     } catch (err) {
