@@ -1,11 +1,13 @@
 import type { ReactNode } from 'react'
 
-type BadgeVariant = 'gray' | 'green' | 'amber'
+type BadgeVariant = 'gray' | 'green' | 'amber' | 'rose' | 'indigo'
 
 const VARIANT_CLASSES: Record<BadgeVariant, string> = {
   gray: 'bg-gray-100 text-gray-500',
   green: 'bg-green-50 text-green-700',
   amber: 'bg-amber-100 text-amber-700',
+  rose: 'bg-rose-50 text-rose-600',
+  indigo: 'bg-indigo-50 text-indigo-600',
 }
 
 interface BadgeProps {

@@ -49,6 +49,15 @@ export default function FileUploadField({
   const inputRef = useRef<HTMLInputElement>(null)
   const [isDragActive, setIsDragActive] = useState(false)
   const [rejectionError, setRejectionError] = useState<string | null>(null)
+  // "Change," for the dropzone variant, should bring back the full
+  // drag-and-drop affordance -- not jump straight to the native file
+  // picker (that regressed to feeling like every other plain file input,
+  // and threw away the drag & drop entry point entirely once a file
+  // already existed, which is true almost immediately after a restored
+  // session repopulates `restoredFileName`). This flag toggles the
+  // *same* dropzone markup used for the empty state back into view
+  // instead of duplicating it — see `dropzoneContent` below.
+  const [isReplacing, setIsReplacing] = useState(false)
 
   function openPicker() {
     inputRef.current?.click()
@@ -60,6 +69,7 @@ export default function FileUploadField({
       return
     }
     setRejectionError(null)
+    setIsReplacing(false)
     onFileSelected(candidate)
   }
 
@@ -88,7 +98,7 @@ export default function FileUploadField({
 
   const displayName = file?.name ?? restoredFileName
 
-  if (displayName) {
+  if (displayName && !isReplacing) {
     return (
       <div>
         <div className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
@@ -103,7 +113,11 @@ export default function FileUploadField({
             <span className="truncate">{displayName}</span>
           </span>
           <span className="flex shrink-0 items-center gap-3 text-xs font-medium">
-            <button type="button" onClick={openPicker} className="text-indigo-600 hover:underline">
+            <button
+              type="button"
+              onClick={() => (variant === 'dropzone' ? setIsReplacing(true) : openPicker())}
+              className="text-indigo-600 hover:underline"
+            >
               Change
             </button>
             <button
@@ -133,6 +147,9 @@ export default function FileUploadField({
     )
   }
 
+  // The dropzone itself: rendered both for the true empty state (no file
+  // yet) and for "Change" on an already-selected/restored file
+  // (`isReplacing`) -- one block, not a second copy of the same markup.
   return (
     <div>
       <div
@@ -159,6 +176,15 @@ export default function FileUploadField({
         </p>
         <p className="text-xs text-gray-400">{acceptLabel}</p>
       </div>
+      {isReplacing && displayName && (
+        <button
+          type="button"
+          onClick={() => setIsReplacing(false)}
+          className="mt-1.5 text-xs font-medium text-gray-400 hover:text-gray-600 hover:underline"
+        >
+          Cancel
+        </button>
+      )}
       {rejectionError && <p className="mt-1.5 text-xs text-rose-500">{rejectionError}</p>}
       {hiddenInput}
     </div>

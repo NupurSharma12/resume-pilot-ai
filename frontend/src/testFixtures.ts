@@ -2,7 +2,11 @@ import type { ResumeAnalysisResult } from './data/types'
 import type { ResumeInputValue } from './components/ResumeInput'
 import type { JobDescriptionInputValue } from './components/JobDescriptionInput'
 import type { ConversationSessionState } from './data/careerConversationTypes'
-import type { TailorResumeResult } from './data/tailoringTypes'
+import type {
+  ApplySuggestionsResponse,
+  GenerateSuggestionsResponse,
+  TailoringSuggestion,
+} from './data/tailoringSuggestionsTypes'
 import { RESUME_SESSION_VERSION, type PersistedResumeSession } from './session/resumeSessionTypes'
 
 export const fixtureResume: ResumeInputValue = {
@@ -59,43 +63,49 @@ export const fixtureCompletedSession: ConversationSessionState = {
   stop_reason: 'Enough evidence recovered.',
 }
 
-export const fixtureTailorResult: TailorResumeResult = {
-  tailoring_plan: {
-    changes: [
-      {
-        section: 'Summary',
-        action: 'rewrite',
-        reason: 'Recent backend engineering work is missing.',
-        evidence_ids: ['conversation-turn-1'],
-      },
-    ],
-  },
-  tailored_resume: {
-    sections: [
-      {
-        heading: 'Summary',
-        bullets: [
-          {
-            text: 'Led the migration of the dashboard from Angular to React.',
-            supporting_evidence_ids: ['conversation-turn-1'],
-          },
-        ],
-      },
-    ],
-  },
-  validation_report: {
-    total_bullets: 2,
-    accepted_count: 1,
-    rejected_count: 1,
-    rejected_bullets: [
-      {
-        section: 'Summary',
-        text: 'Reduced infrastructure costs by 40% using Kubernetes.',
-        reason: 'Contains term(s) not present in cited evidence: Kubernetes.',
-      },
-    ],
-    passed: false,
-  },
+export const fixtureSuggestionAppend: TailoringSuggestion = {
+  suggestion_id: 'suggestion-0',
+  target_section_id: 'section-1',
+  target_item_id: 'section-1-item-0',
+  operation: 'append',
+  current_text: 'Python',
+  suggested_text: 'Python, TypeScript',
+  reason: 'TypeScript experience is missing from Skills.',
+  evidence_ids: ['conversation-turn-1'],
+  evidence_sources: ['Conversation Turn 1'],
+  confidence: 90,
+  selected_by_default: true,
+  validation_status: 'supported_by_conversation',
+  validation_issues: [],
+}
+
+export const fixtureSuggestionInsert: TailoringSuggestion = {
+  suggestion_id: 'suggestion-1',
+  target_section_id: 'section-2',
+  target_item_id: 'section-2-item-0',
+  operation: 'insert_after',
+  current_text: null,
+  suggested_text: 'Led the migration of the dashboard from Angular to React.',
+  reason: 'Recent frontend work is missing from Experience.',
+  evidence_ids: ['conversation-turn-1'],
+  evidence_sources: ['Conversation Turn 1'],
+  confidence: 85,
+  selected_by_default: true,
+  validation_status: 'supported_by_conversation',
+  validation_issues: [],
+}
+
+export const fixtureGenerateSuggestionsResponse: GenerateSuggestionsResponse = {
+  plan_id: 'plan-123',
+  suggestions: [fixtureSuggestionAppend, fixtureSuggestionInsert],
+  available_export_formats: ['txt', 'markdown', 'docx', 'pdf'],
+  default_export_format: 'txt',
+}
+
+export const fixtureApplySuggestionsResponse: ApplySuggestionsResponse = {
+  applied_suggestion_ids: ['suggestion-0'],
+  final_resume_text: 'SUMMARY\nExperienced engineer...\n\nSKILLS\nPython, TypeScript\n',
+  final_validation: { is_valid: true, messages: [] },
 }
 
 export function fixturePersistedSession(
@@ -109,7 +119,15 @@ export function fixturePersistedSession(
     status: 'success',
     activeCareerConversationSessionId: null,
     careerConversationStatus: null,
-    tailoredResumeResult: null,
+    tailoringPlan: null,
+    tailoringPlanStatus: 'idle',
+    tailoringSelections: [],
+    tailoringCustomInstructions: '',
+    tailoringEditedTexts: {},
+    finalTailoredResume: null,
+    tailoringValidationReport: null,
+    tailoringAvailableExportFormats: [],
+    tailoringSourceFormat: null,
     ...overrides,
   }
 }

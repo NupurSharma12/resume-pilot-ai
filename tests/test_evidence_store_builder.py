@@ -16,9 +16,21 @@ from app.models.resume_analysis import (
     ResumeImprovement,
     SkillMatch,
 )
+from app.models.resume_structure import StructuredResume
+from app.resume_structure.parser import ResumeStructureParser
 
 _RESUME_TEXT = "Built internal tooling for the platform team using Python and React."
 _JOB_DESCRIPTION = "Looking for a full-stack engineer with React and Python experience."
+
+
+def _structured_resume() -> StructuredResume:
+    return ResumeStructureParser().parse(_RESUME_TEXT)
+
+
+def _build(analysis: ResumeAnalysisResult, history: list[ConversationExchange]):
+    return EvidenceStoreBuilder().build(
+        _structured_resume(), _RESUME_TEXT, _JOB_DESCRIPTION, analysis, history
+    )
 
 
 def _analysis() -> ResumeAnalysisResult:
@@ -79,7 +91,7 @@ def _history() -> list[ConversationExchange]:
 
 
 def test_includes_full_resume_text_as_one_item() -> None:
-    store = EvidenceStoreBuilder().build(_RESUME_TEXT, _JOB_DESCRIPTION, _analysis(), [])
+    store = _build(_analysis(), [])
 
     item = store.get("resume-full-text")
     assert item is not None
@@ -88,7 +100,7 @@ def test_includes_full_resume_text_as_one_item() -> None:
 
 
 def test_includes_analysis_summary() -> None:
-    store = EvidenceStoreBuilder().build(_RESUME_TEXT, _JOB_DESCRIPTION, _analysis(), [])
+    store = _build(_analysis(), [])
 
     item = store.get("analysis-summary")
     assert item is not None
@@ -97,7 +109,7 @@ def test_includes_analysis_summary() -> None:
 
 
 def test_includes_one_item_per_strength() -> None:
-    store = EvidenceStoreBuilder().build(_RESUME_TEXT, _JOB_DESCRIPTION, _analysis(), [])
+    store = _build(_analysis(), [])
 
     item = store.get("analysis-strength-1")
     assert item is not None
@@ -106,7 +118,7 @@ def test_includes_one_item_per_strength() -> None:
 
 
 def test_includes_one_item_per_matching_project_numbered_from_one() -> None:
-    store = EvidenceStoreBuilder().build(_RESUME_TEXT, _JOB_DESCRIPTION, _analysis(), [])
+    store = _build(_analysis(), [])
 
     item = store.get("analysis-matching-project-1")
     assert item is not None
@@ -116,7 +128,7 @@ def test_includes_one_item_per_matching_project_numbered_from_one() -> None:
 
 
 def test_skill_match_with_matched_skills_becomes_evidence() -> None:
-    store = EvidenceStoreBuilder().build(_RESUME_TEXT, _JOB_DESCRIPTION, _analysis(), [])
+    store = _build(_analysis(), [])
 
     item = store.get("analysis-skill-match-frontend")
     assert item is not None
@@ -126,14 +138,14 @@ def test_skill_match_with_matched_skills_becomes_evidence() -> None:
 
 def test_skill_match_with_no_matched_skills_is_not_evidence() -> None:
     """A category with zero matched skills is a gap, not a fact to cite."""
-    store = EvidenceStoreBuilder().build(_RESUME_TEXT, _JOB_DESCRIPTION, _analysis(), [])
+    store = _build(_analysis(), [])
 
     assert store.get("analysis-skill-match-cloud") is None
 
 
 def test_weaknesses_and_improvements_are_never_evidence() -> None:
     """Gaps aren't facts about the candidate -- they must never be citable as evidence."""
-    store = EvidenceStoreBuilder().build(_RESUME_TEXT, _JOB_DESCRIPTION, _analysis(), [])
+    store = _build(_analysis(), [])
 
     for item in store.items:
         assert "No demonstrated cloud infrastructure experience" not in item.content
@@ -141,7 +153,7 @@ def test_weaknesses_and_improvements_are_never_evidence() -> None:
 
 
 def test_conversation_turns_become_numbered_evidence_items() -> None:
-    store = EvidenceStoreBuilder().build(_RESUME_TEXT, _JOB_DESCRIPTION, _analysis(), _history())
+    store = _build(_analysis(), _history())
 
     turn_1 = store.get("conversation-turn-1")
     turn_2 = store.get("conversation-turn-2")
@@ -155,20 +167,20 @@ def test_conversation_turns_become_numbered_evidence_items() -> None:
 
 
 def test_empty_conversation_history_produces_no_conversation_items() -> None:
-    store = EvidenceStoreBuilder().build(_RESUME_TEXT, _JOB_DESCRIPTION, _analysis(), [])
+    store = _build(_analysis(), [])
 
     assert all(item.source != EvidenceSource.CONVERSATION for item in store.items)
 
 
 def test_evidence_ids_are_unique() -> None:
-    store = EvidenceStoreBuilder().build(_RESUME_TEXT, _JOB_DESCRIPTION, _analysis(), _history())
+    store = _build(_analysis(), _history())
 
     ids = [item.evidence_id for item in store.items]
     assert len(ids) == len(set(ids))
 
 
 def test_catalog_text_includes_every_item_id() -> None:
-    store = EvidenceStoreBuilder().build(_RESUME_TEXT, _JOB_DESCRIPTION, _analysis(), _history())
+    store = _build(_analysis(), _history())
 
     catalog = store.catalog_text()
     for item in store.items:

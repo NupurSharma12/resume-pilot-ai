@@ -3,7 +3,11 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import ConversationCompleteCard from './ConversationCompleteCard'
 import { ResumeSessionProvider } from '../session/ResumeSessionContext'
-import { fixturePersistedSession, fixtureTailorResult } from '../testFixtures'
+import {
+  fixtureApplySuggestionsResponse,
+  fixtureGenerateSuggestionsResponse,
+  fixturePersistedSession,
+} from '../testFixtures'
 import type { PersistedResumeSession, ResumeSessionStorage } from '../session/resumeSessionTypes'
 
 function createFakeStorage(initial: PersistedResumeSession | null): ResumeSessionStorage {
@@ -39,27 +43,39 @@ function renderCard(overrides: Partial<PersistedResumeSession> = {}) {
 }
 
 describe('ConversationCompleteCard', () => {
-  it('renders an enabled "Generate Tailored Resume" CTA when no tailored resume exists yet', () => {
+  it('renders an enabled "Generate Tailoring Plan" CTA when no plan exists yet', () => {
     renderCard()
 
-    const button = screen.getByRole('button', { name: /generate tailored resume/i })
+    const button = screen.getByRole('button', { name: /generate tailoring plan/i })
     expect(button).toBeEnabled()
     expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
   })
 
-  it('shows "View Tailored Resume" once a tailored resume already exists in session', () => {
-    renderCard({ tailoredResumeResult: fixtureTailorResult })
+  it('shows "Review Suggestions" once a plan exists but nothing has been applied yet', () => {
+    renderCard({ tailoringPlan: fixtureGenerateSuggestionsResponse })
+
+    expect(screen.getByRole('button', { name: /review suggestions/i })).toBeInTheDocument()
+  })
+
+  it('shows "View Tailored Resume" once a final resume already exists in session', () => {
+    renderCard({
+      tailoringPlan: fixtureGenerateSuggestionsResponse,
+      finalTailoredResume: {
+        finalResumeText: fixtureApplySuggestionsResponse.final_resume_text,
+        appliedSuggestionIds: fixtureApplySuggestionsResponse.applied_suggestion_ids,
+      },
+    })
 
     expect(screen.getByRole('button', { name: /view tailored resume/i })).toBeInTheDocument()
     expect(
-      screen.queryByRole('button', { name: /^generate tailored resume$/i }),
+      screen.queryByRole('button', { name: /^generate tailoring plan$/i }),
     ).not.toBeInTheDocument()
   })
 
   it('navigates to /tailored-resume when clicked', async () => {
     renderCard()
 
-    fireEvent.click(screen.getByRole('button', { name: /generate tailored resume/i }))
+    fireEvent.click(screen.getByRole('button', { name: /generate tailoring plan/i }))
 
     await waitFor(() => expect(screen.getByText('Tailored Resume Page')).toBeInTheDocument())
   })

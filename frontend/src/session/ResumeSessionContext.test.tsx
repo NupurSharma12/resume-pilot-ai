@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, act } from '@testing-library/react'
 import { ResumeSessionProvider, useResumeSession } from './ResumeSessionContext'
 import type { PersistedResumeSession, ResumeSessionStorage } from './resumeSessionTypes'
-import { fixturePersistedSession, fixtureResume, fixtureTailorResult } from '../testFixtures'
+import {
+  fixtureApplySuggestionsResponse,
+  fixtureGenerateSuggestionsResponse,
+  fixturePersistedSession,
+  fixtureResume,
+} from '../testFixtures'
 
 function createFakeStorage(initial: PersistedResumeSession | null = null): ResumeSessionStorage & {
   saves: PersistedResumeSession[]
@@ -31,7 +36,10 @@ function Probe() {
       <span data-testid="status">{session.status}</span>
       <span data-testid="sessionId">{session.activeCareerConversationSessionId ?? 'none'}</span>
       <span data-testid="conversationStatus">{session.careerConversationStatus ?? 'none'}</span>
-      <span data-testid="tailoredResult">{session.tailoredResumeResult ? 'present' : 'none'}</span>
+      <span data-testid="tailoringPlan">{session.tailoringPlan ? 'present' : 'none'}</span>
+      <span data-testid="tailoringSelections">{session.tailoringSelections.join(',')}</span>
+      <span data-testid="customInstructions">{session.tailoringCustomInstructions}</span>
+      <span data-testid="finalResume">{session.finalTailoredResume ? 'present' : 'none'}</span>
       <button onClick={() => session.setResume(fixtureResume)}>set-resume</button>
       <button onClick={() => session.setStatus('loading')}>set-loading</button>
       <button onClick={() => session.setActiveCareerConversationSessionId('conv-1')}>
@@ -40,8 +48,24 @@ function Probe() {
       <button onClick={() => session.setCareerConversationStatus('complete')}>
         set-conversation-complete
       </button>
-      <button onClick={() => session.setTailoredResumeResult(fixtureTailorResult)}>
-        set-tailored-result
+      <button onClick={() => session.setTailoringPlan(fixtureGenerateSuggestionsResponse)}>
+        set-tailoring-plan
+      </button>
+      <button onClick={() => session.setTailoringSelections(['suggestion-0'])}>
+        set-selections
+      </button>
+      <button onClick={() => session.setTailoringCustomInstructions('Keep it under two pages.')}>
+        set-instructions
+      </button>
+      <button
+        onClick={() =>
+          session.setFinalTailoredResume({
+            finalResumeText: fixtureApplySuggestionsResponse.final_resume_text,
+            appliedSuggestionIds: fixtureApplySuggestionsResponse.applied_suggestion_ids,
+          })
+        }
+      >
+        set-final-resume
       </button>
       <button onClick={() => session.clearSession()}>clear</button>
     </div>
@@ -134,8 +158,19 @@ describe('ResumeSessionProvider', () => {
     })
   })
 
-  it('clearSession clears storage and resets in-memory state', async () => {
-    const storage = createFakeStorage(fixturePersistedSession({ activeCareerConversationSessionId: 'conv-1' }))
+  it('clearSession clears storage and resets in-memory state, including tailoring state', async () => {
+    const storage = createFakeStorage(
+      fixturePersistedSession({
+        activeCareerConversationSessionId: 'conv-1',
+        tailoringPlan: fixtureGenerateSuggestionsResponse,
+        tailoringSelections: ['suggestion-0'],
+        tailoringCustomInstructions: 'Keep it short.',
+        finalTailoredResume: {
+          finalResumeText: fixtureApplySuggestionsResponse.final_resume_text,
+          appliedSuggestionIds: fixtureApplySuggestionsResponse.applied_suggestion_ids,
+        },
+      }),
+    )
     const clearSpy = vi.spyOn(storage, 'clear')
     render(
       <ResumeSessionProvider storage={storage}>
@@ -143,6 +178,7 @@ describe('ResumeSessionProvider', () => {
       </ResumeSessionProvider>,
     )
     await waitFor(() => expect(screen.getByTestId('resume').textContent).toBe('resume.txt'))
+    expect(screen.getByTestId('tailoringPlan').textContent).toBe('present')
 
     await act(async () => {
       screen.getByText('clear').click()
@@ -152,14 +188,23 @@ describe('ResumeSessionProvider', () => {
     expect(screen.getByTestId('resume').textContent).toBe('none')
     expect(screen.getByTestId('sessionId').textContent).toBe('none')
     expect(screen.getByTestId('conversationStatus').textContent).toBe('none')
-    expect(screen.getByTestId('tailoredResult').textContent).toBe('none')
+    expect(screen.getByTestId('tailoringPlan').textContent).toBe('none')
+    expect(screen.getByTestId('tailoringSelections').textContent).toBe('')
+    expect(screen.getByTestId('customInstructions').textContent).toBe('')
+    expect(screen.getByTestId('finalResume').textContent).toBe('none')
   })
 
-  it('rehydrates careerConversationStatus and tailoredResumeResult from storage', async () => {
+  it('rehydrates tailoring plan, selections, custom instructions, and final resume from storage', async () => {
     const storage = createFakeStorage(
       fixturePersistedSession({
         careerConversationStatus: 'complete',
-        tailoredResumeResult: fixtureTailorResult,
+        tailoringPlan: fixtureGenerateSuggestionsResponse,
+        tailoringSelections: ['suggestion-0'],
+        tailoringCustomInstructions: 'Keep it under two pages.',
+        finalTailoredResume: {
+          finalResumeText: fixtureApplySuggestionsResponse.final_resume_text,
+          appliedSuggestionIds: fixtureApplySuggestionsResponse.applied_suggestion_ids,
+        },
       }),
     )
     render(
@@ -170,10 +215,13 @@ describe('ResumeSessionProvider', () => {
 
     await waitFor(() => expect(screen.getByTestId('hydration').textContent).toBe('hydrated'))
     expect(screen.getByTestId('conversationStatus').textContent).toBe('complete')
-    expect(screen.getByTestId('tailoredResult').textContent).toBe('present')
+    expect(screen.getByTestId('tailoringPlan').textContent).toBe('present')
+    expect(screen.getByTestId('tailoringSelections').textContent).toBe('suggestion-0')
+    expect(screen.getByTestId('customInstructions').textContent).toBe('Keep it under two pages.')
+    expect(screen.getByTestId('finalResume').textContent).toBe('present')
   })
 
-  it('persists careerConversationStatus and tailoredResumeResult after they are set', async () => {
+  it('persists tailoring plan, selections, custom instructions, and final resume after they are set', async () => {
     const storage = createFakeStorage(null)
     render(
       <ResumeSessionProvider storage={storage}>
@@ -186,15 +234,31 @@ describe('ResumeSessionProvider', () => {
       screen.getByText('set-conversation-complete').click()
     })
     await act(async () => {
-      screen.getByText('set-tailored-result').click()
+      screen.getByText('set-tailoring-plan').click()
+    })
+    await act(async () => {
+      screen.getByText('set-selections').click()
+    })
+    await act(async () => {
+      screen.getByText('set-instructions').click()
+    })
+    await act(async () => {
+      screen.getByText('set-final-resume').click()
     })
 
     expect(screen.getByTestId('conversationStatus').textContent).toBe('complete')
-    expect(screen.getByTestId('tailoredResult').textContent).toBe('present')
+    expect(screen.getByTestId('tailoringPlan').textContent).toBe('present')
+    expect(screen.getByTestId('finalResume').textContent).toBe('present')
     await waitFor(() => {
       const last = storage.saves.at(-1)
       expect(last?.careerConversationStatus).toBe('complete')
-      expect(last?.tailoredResumeResult).toEqual(fixtureTailorResult)
+      expect(last?.tailoringPlan).toEqual(fixtureGenerateSuggestionsResponse)
+      expect(last?.tailoringSelections).toEqual(['suggestion-0'])
+      expect(last?.tailoringCustomInstructions).toBe('Keep it under two pages.')
+      expect(last?.finalTailoredResume).toEqual({
+        finalResumeText: fixtureApplySuggestionsResponse.final_resume_text,
+        appliedSuggestionIds: fixtureApplySuggestionsResponse.applied_suggestion_ids,
+      })
     })
   })
 

@@ -1,4 +1,15 @@
-# Tailoring Engine
+# Tailoring Engine (superseded)
+
+> **Superseded.** `POST /v1/tailor-resume` and everything below describe the
+> original whole-section rewrite pipeline. It has been removed from the
+> codebase and replaced by the Interactive Resume Tailoring feature — see
+> [`docs/features/interactive-tailored-resume.md`](interactive-tailored-resume.md)
+> for the pipeline as it exists today: per-item edit *suggestions* a user
+> reviews and approves, not an automatic section rewrite. This document is
+> kept for historical context (the two-call-per-change pattern, the
+> evidence-scoping guarantee, and the validation approach described below
+> were all carried forward, refined, into the new pipeline) — nothing on
+> this page reflects the current API or domain model.
 
 Sprint 12 shipped `POST /v1/tailor-resume`. This document describes the
 pipeline as implemented, replacing the earlier design brainstorms

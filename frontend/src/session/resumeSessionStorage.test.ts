@@ -54,4 +54,82 @@ describe('sessionStorageResumeSessionStorage', () => {
     window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(['not', 'an', 'object']))
     expect(sessionStorageResumeSessionStorage.load()).toBeNull()
   })
+
+  it('round-trips tailoring plan, selections, custom instructions, and final resume', () => {
+    const session = fixturePersistedSession({
+      tailoringPlan: {
+        plan_id: 'plan-1',
+        suggestions: [],
+        available_export_formats: ['txt', 'pdf'],
+        default_export_format: 'txt',
+      },
+      tailoringSelections: ['suggestion-0'],
+      tailoringCustomInstructions: 'Keep it under two pages.',
+      tailoringEditedTexts: { 'suggestion-0': 'Edited text.' },
+      finalTailoredResume: { finalResumeText: 'Final text.', appliedSuggestionIds: ['suggestion-0'] },
+      tailoringValidationReport: { is_valid: true, messages: [] },
+      tailoringAvailableExportFormats: ['txt', 'pdf'],
+      tailoringSourceFormat: 'pdf',
+    })
+    sessionStorageResumeSessionStorage.save(session)
+    expect(sessionStorageResumeSessionStorage.load()).toEqual(session)
+  })
+
+  it('discards a payload from a version predating the Interactive Tailoring fields', () => {
+    // A session persisted by a prior build of this app: no tailoringPlan/
+    // tailoringSelections/etc. keys at all, and version 1 instead of 2.
+    const legacySession = {
+      version: 1,
+      resume: null,
+      jobDescription: null,
+      resumeAnalysis: null,
+      status: 'idle',
+      activeCareerConversationSessionId: null,
+      careerConversationStatus: null,
+      tailoredResumeResult: null,
+    }
+    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(legacySession))
+    expect(sessionStorageResumeSessionStorage.load()).toBeNull()
+    expect(window.sessionStorage.getItem(STORAGE_KEY)).toBeNull()
+  })
+
+  it('discards a payload with an invalid tailoringPlanStatus enum', () => {
+    window.sessionStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ ...fixturePersistedSession(), tailoringPlanStatus: 'generating' }),
+    )
+    expect(sessionStorageResumeSessionStorage.load()).toBeNull()
+  })
+
+  it('discards a payload where tailoringSelections is not an array', () => {
+    window.sessionStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ ...fixturePersistedSession(), tailoringSelections: 'suggestion-0' }),
+    )
+    expect(sessionStorageResumeSessionStorage.load()).toBeNull()
+  })
+
+  it('discards a payload where tailoringCustomInstructions is not a string', () => {
+    window.sessionStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ ...fixturePersistedSession(), tailoringCustomInstructions: 42 }),
+    )
+    expect(sessionStorageResumeSessionStorage.load()).toBeNull()
+  })
+
+  it('discards a payload where tailoringEditedTexts is not an object', () => {
+    window.sessionStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ ...fixturePersistedSession(), tailoringEditedTexts: ['not', 'a', 'record'] }),
+    )
+    expect(sessionStorageResumeSessionStorage.load()).toBeNull()
+  })
+
+  it('discards a payload with an invalid tailoringSourceFormat', () => {
+    window.sessionStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ ...fixturePersistedSession(), tailoringSourceFormat: 'jpeg' }),
+    )
+    expect(sessionStorageResumeSessionStorage.load()).toBeNull()
+  })
 })
