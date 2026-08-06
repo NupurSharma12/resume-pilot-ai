@@ -9,6 +9,7 @@ from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging, get_logger
 from app.gateways.llm.factory import build_llm_gateway
 from app.sessions.conversation_session import ConversationSessionStore
+from app.sessions.tailoring_plan_store import TailoringPlanStore
 
 
 @asynccontextmanager
@@ -46,6 +47,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # constructed once here rather than per-request (see
     # `app.sessions.conversation_session`'s module docstring).
     app.state.conversation_session_store = ConversationSessionStore()
+    # Same process-lifetime-singleton reasoning as `conversation_session_store`
+    # above: generated suggestion plans must persist across the
+    # generate -> apply -> export request sequence (see
+    # `app.sessions.tailoring_plan_store`'s module docstring).
+    app.state.tailoring_plan_store = TailoringPlanStore()
 
     app.add_middleware(
         CORSMiddleware,
@@ -53,6 +59,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Browsers only expose a small safelisted set of response headers
+        # to cross-origin JS by default (Content-Type, Content-Length,
+        # ...) -- Content-Disposition and X-Export-Fidelity aren't in it,
+        # so without this, `POST /tailoring-suggestions/{plan_id}/export`
+        # would work fine over the wire but the frontend's `fetch()` would
+        # get `null` back from `response.headers.get(...)` for both,
+        # silently breaking filename/fidelity parsing (see
+        # `frontend/src/lib/tailoringSuggestionsApi.ts`).
+        expose_headers=["Content-Disposition", "X-Export-Fidelity"],
     )
 
     app.include_router(api_router)

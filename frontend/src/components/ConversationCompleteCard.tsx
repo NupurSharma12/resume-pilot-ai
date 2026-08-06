@@ -12,16 +12,18 @@ interface ConversationCompleteCardProps {
 // point into the Tailoring Engine (this card only ever renders once the
 // conversation itself is complete, so unlike TailoredResumeBanner there's
 // no "complete the conversation first" state to show here). The CTA label
-// mirrors TailoredResumeBanner's "View" vs "Generate" toggle, reading the
-// same `tailoredResumeResult` signal from ResumeSessionProvider, so it
-// can't drift out of sync with what clicking it actually leads to.
+// mirrors TailoredResumeBanner's plan/final-resume lifecycle toggle,
+// reading the same `tailoringPlan`/`finalTailoredResume` signals from
+// ResumeSessionProvider, so it can't drift out of sync with what clicking
+// it actually leads to.
 export default function ConversationCompleteCard({
   stopReason,
   questionsAnswered,
 }: ConversationCompleteCardProps) {
   const navigate = useNavigate()
-  const { tailoredResumeResult } = useResumeSession()
-  const hasResult = tailoredResumeResult !== null
+  const { tailoringPlan, finalTailoredResume } = useResumeSession()
+  const hasPlan = tailoringPlan !== null
+  const hasResult = finalTailoredResume !== null
 
   return (
     <div className="animate-panel-fade overflow-hidden rounded-2xl border border-gray-200 bg-white">
@@ -50,7 +52,9 @@ export default function ConversationCompleteCard({
             <p className="mt-1 text-sm text-gray-500">
               {hasResult
                 ? 'Your tailored resume is ready.'
-                : 'Use what you just shared to generate an evidence-backed resume for this job.'}
+                : hasPlan
+                  ? 'Suggestions are ready for your review.'
+                  : 'Use what you just shared to generate evidence-backed edit suggestions for this job.'}
             </p>
           </div>
         </div>
@@ -60,7 +64,7 @@ export default function ConversationCompleteCard({
           icon={<Wand2 size={16} />}
           onClick={() => navigate('/tailored-resume')}
         >
-          {hasResult ? 'View Tailored Resume' : 'Generate Tailored Resume'}
+          {hasResult ? 'View Tailored Resume' : hasPlan ? 'Review Suggestions' : 'Generate Tailoring Plan'}
         </Button>
       </div>
     </div>

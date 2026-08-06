@@ -3,7 +3,11 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import TailoredResumeBanner from './TailoredResumeBanner'
 import { ResumeSessionProvider } from '../session/ResumeSessionContext'
-import { fixturePersistedSession, fixtureTailorResult } from '../testFixtures'
+import {
+  fixtureApplySuggestionsResponse,
+  fixtureGenerateSuggestionsResponse,
+  fixturePersistedSession,
+} from '../testFixtures'
 import type { PersistedResumeSession, ResumeSessionStorage } from '../session/resumeSessionTypes'
 
 function createFakeStorage(initial: PersistedResumeSession | null): ResumeSessionStorage {
@@ -49,15 +53,31 @@ describe('TailoredResumeBanner', () => {
     ).toBeDisabled()
   })
 
-  it('shows an enabled "Generate Tailored Resume" CTA once the conversation is complete', () => {
+  it('shows an enabled "Generate Tailoring Plan" CTA once the conversation is complete and no plan exists', () => {
     renderBanner({ careerConversationStatus: 'complete' })
 
-    const button = screen.getByRole('button', { name: /generate tailored resume/i })
+    const button = screen.getByRole('button', { name: /generate tailoring plan/i })
     expect(button).toBeEnabled()
   })
 
-  it('shows "View Tailored Resume" once a tailored resume already exists this session', () => {
-    renderBanner({ careerConversationStatus: 'complete', tailoredResumeResult: fixtureTailorResult })
+  it('shows "Review Suggestions" once a plan exists but nothing has been applied yet', () => {
+    renderBanner({
+      careerConversationStatus: 'complete',
+      tailoringPlan: fixtureGenerateSuggestionsResponse,
+    })
+
+    expect(screen.getByRole('button', { name: /review suggestions/i })).toBeEnabled()
+  })
+
+  it('shows "View Tailored Resume" once a final resume already exists this session', () => {
+    renderBanner({
+      careerConversationStatus: 'complete',
+      tailoringPlan: fixtureGenerateSuggestionsResponse,
+      finalTailoredResume: {
+        finalResumeText: fixtureApplySuggestionsResponse.final_resume_text,
+        appliedSuggestionIds: fixtureApplySuggestionsResponse.applied_suggestion_ids,
+      },
+    })
 
     expect(screen.getByRole('button', { name: /view tailored resume/i })).toBeEnabled()
   })
@@ -65,7 +85,7 @@ describe('TailoredResumeBanner', () => {
   it('navigates to /tailored-resume when the enabled CTA is clicked', async () => {
     renderBanner({ careerConversationStatus: 'complete' })
 
-    fireEvent.click(screen.getByRole('button', { name: /generate tailored resume/i }))
+    fireEvent.click(screen.getByRole('button', { name: /generate tailoring plan/i }))
 
     await waitFor(() => expect(screen.getByText('Tailored Resume Page')).toBeInTheDocument())
   })

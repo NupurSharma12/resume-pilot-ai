@@ -3,23 +3,37 @@ import { useNavigate } from 'react-router-dom'
 import Button from './Button'
 import { useResumeSession } from '../session/ResumeSessionContext'
 
-// Reads `careerConversationStatus`/`tailoredResumeResult` from
-// `ResumeSessionProvider` rather than owning any state of its own -- the
-// same single-source-of-truth signals TailoredResumePage itself renders
-// from, so this banner's CTA label can never drift out of sync with what
-// clicking it actually leads to.
+// Reads `careerConversationStatus`/`tailoringPlan`/`finalTailoredResume`
+// from `ResumeSessionProvider` rather than owning any state of its own --
+// the same single-source-of-truth signals TailoredResumePage itself
+// renders from, so this banner's CTA label can never drift out of sync
+// with what clicking it actually leads to. Three states, matching this
+// feature's lifecycle: conversation incomplete (blocked), plan not yet
+// generated (entry point), plan generated but nothing applied yet
+// (review), and a final resume already produced (view/download).
 export default function TailoredResumeBanner() {
   const navigate = useNavigate()
-  const { careerConversationStatus, tailoredResumeResult } = useResumeSession()
+  const { careerConversationStatus, tailoringPlan, finalTailoredResume } = useResumeSession()
 
   const isConversationComplete = careerConversationStatus === 'complete'
-  const hasResult = tailoredResumeResult !== null
+  const hasPlan = tailoringPlan !== null
+  const hasFinalResume = finalTailoredResume !== null
 
   const ctaLabel = !isConversationComplete
     ? 'Complete Career Conversation first.'
-    : hasResult
+    : hasFinalResume
       ? 'View Tailored Resume'
-      : 'Generate Tailored Resume'
+      : hasPlan
+        ? 'Review Suggestions'
+        : 'Generate Tailoring Plan'
+
+  const description = !isConversationComplete
+    ? 'Recover evidence in a Career Conversation first, so this has something real to ground suggestions in.'
+    : hasFinalResume
+      ? 'Your tailored resume is ready to preview and download.'
+      : hasPlan
+        ? 'Suggestions are ready for your review -- nothing has been applied yet.'
+        : 'Generate small, evidence-backed edit suggestions for this job description.'
 
   return (
     <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white">
@@ -30,11 +44,7 @@ export default function TailoredResumeBanner() {
           </div>
           <div>
             <h3 className="font-semibold text-gray-900">Tailored Resume Generator</h3>
-            <p className="mt-1 text-sm text-gray-500">
-              {isConversationComplete
-                ? 'Generate an evidence-backed resume for this job description.'
-                : 'Recover evidence in a Career Conversation first, so this has something real to ground a rewrite in.'}
-            </p>
+            <p className="mt-1 text-sm text-gray-500">{description}</p>
           </div>
         </div>
 

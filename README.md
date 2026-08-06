@@ -134,18 +134,36 @@ This makes the conversation feel much closer to speaking with an experienced rec
 
 ---
 
-## Tailored Resume (NEW)
+## Interactive Resume Tailoring (NEW)
 
-`POST /v1/tailor-resume` runs the Evidence-Based Tailoring Engine — **not** an AI resume writer. Every change it makes must be traceable to something that already exists: the original resume, the resume analysis, or the Career Conversation transcript. It never invents experience, technologies, dates, responsibilities, achievements, or metrics.
+ResumePilotAI does not rewrite resumes automatically. It proposes small,
+evidence-backed edit **suggestions** — one existing bullet at a time —
+that the candidate reviews and individually approves before anything
+changes. Nothing is invented: every suggestion must be traceable to the
+original resume, the resume analysis, or the Career Conversation
+transcript.
 
-The pipeline runs four stages, in order:
+Three endpoints, matching the review workflow:
 
-1. **Evidence Store** — combines the original resume, the resume analysis, and the Career Conversation transcript into one flat catalog of citable facts. No rewriting happens here; this is the "facts database."
-2. **Tailoring Planner** — decides *what* should change, *why*, and *which evidence* supports it. It does not write any resume text.
-3. **Resume Rewrite Engine** — follows the plan and writes the actual bullets, citing which evidence each one is based on. It may only improve wording, ordering, emphasis, and clarity.
-4. **Validation** — checks every rewritten bullet against the evidence it cited. Anything unsupported, or that cites unknown/no evidence, is rejected and reported — never silently kept.
+1. `POST /v1/tailoring-suggestions` — generates a plan of minimal edit
+   suggestions (`append`, `insert_before`/`insert_after`, `update`,
+   `replace`, `remove`, `add_emphasis` — never a whole-section rewrite),
+   each with a reason, cited evidence, and a validation status.
+2. `POST /v1/tailoring-suggestions/{plan_id}/apply` — applies only the
+   suggestions the candidate selected (plus any custom instructions),
+   deterministically, and returns the final resume and a validation
+   report.
+3. `POST /v1/tailoring-suggestions/{plan_id}/export` — downloads the
+   final resume as TXT, Markdown, DOCX, or PDF, honestly labeled as
+   content-faithful or freshly regenerated (no original PDF/DOCX layout
+   is ever preserved — see the feature doc for why).
 
-The response includes the tailored resume, the plan it was built from, and a validation report listing exactly what was accepted and what was rejected, and why. See `docs/features/tailoring-engine.md` for the full pipeline design.
+The frontend's Tailored Resume page walks through five stages: Generate
+Tailoring Plan → Review Suggestions → Custom Instructions → Apply
+Selected Changes → Preview and Download. See
+`docs/features/interactive-tailored-resume.md` for the full pipeline,
+domain model, and API design (supersedes the earlier whole-section
+`docs/features/tailoring-engine.md`, kept for historical context).
 
 ---
 
@@ -377,7 +395,18 @@ Generates a recruiter-ready resume using:
 without inventing experience, technologies, dates, responsibilities,
 achievements, or metrics. Every change is planned before it's written,
 and every written bullet is validated against its cited evidence before
-it's returned — see `docs/features/tailoring-engine.md`.
+it's returned — see `docs/features/tailoring-engine.md` (superseded, kept
+for historical context).
+
+## ✅ Interactive Resume Tailoring
+
+Replaced the whole-section Tailoring Engine above with a review-and-approve
+workflow: small, evidence-backed edit suggestions the candidate selects
+individually, rather than an automatic rewrite. Adds deterministic
+apply-time conflict detection, per-suggestion evidence revalidation for
+user edits, and downloadable exports (TXT/Markdown/DOCX/PDF) with honest
+formatting-fidelity labels. See
+`docs/features/interactive-tailored-resume.md`.
 
 ## 🚧 Sprint 9
 Interview Coach

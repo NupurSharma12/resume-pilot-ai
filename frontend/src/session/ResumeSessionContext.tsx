@@ -2,13 +2,21 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import type { ResumeAnalysisResult } from '../data/types'
 import type { ResumeInputValue } from '../components/ResumeInput'
 import type { JobDescriptionInputValue } from '../components/JobDescriptionInput'
-import type { TailorResumeResult } from '../data/tailoringTypes'
+import type {
+  ExportFormat,
+  FinalValidationReport,
+  GenerateSuggestionsResponse,
+  SourceFormat,
+} from '../data/tailoringSuggestionsTypes'
 import {
   normalizeStatus,
+  normalizeTailoringPlanStatus,
   RESUME_SESSION_VERSION,
   type AnalysisStatus,
   type CareerConversationStatus,
+  type PersistedFinalTailoredResume,
   type ResumeSessionStorage,
+  type TailoringPlanStatus,
 } from './resumeSessionTypes'
 import { sessionStorageResumeSessionStorage } from './resumeSessionStorage'
 
@@ -36,14 +44,36 @@ export interface ResumeSessionContextValue {
   // why this exists here at all.
   careerConversationStatus: CareerConversationStatus | null
   setCareerConversationStatus: (status: CareerConversationStatus | null) => void
-  // Set once a tailoring run succeeds; deliberately never cleared by a
-  // failed regeneration (see TailoredResumePage) so a later failed retry
-  // can't wipe out the last good result. Presence of a non-null value is
-  // what every "Generate" vs "View Tailored Resume" CTA (TailoredResumeBanner,
-  // ConversationCompleteCard, TailoredResumePage itself) checks, so there is
-  // exactly one place this is ever set.
-  tailoredResumeResult: TailorResumeResult | null
-  setTailoredResumeResult: (result: TailorResumeResult) => void
+
+  // Interactive Tailoring (see docs/features/interactive-tailored-resume.md).
+  // `tailoringPlan` is set once per successful "Generate Tailoring Plan"
+  // call and is the single source of truth every review-stage component
+  // reads suggestions from -- selections/edits below reference it by
+  // `suggestion_id`, never a copy of its content.
+  tailoringPlan: GenerateSuggestionsResponse | null
+  setTailoringPlan: (plan: GenerateSuggestionsResponse | null) => void
+  tailoringPlanStatus: TailoringPlanStatus
+  setTailoringPlanStatus: (status: TailoringPlanStatus) => void
+  tailoringSelections: string[]
+  setTailoringSelections: (selections: string[]) => void
+  tailoringCustomInstructions: string
+  setTailoringCustomInstructions: (instructions: string) => void
+  tailoringEditedTexts: Record<string, string>
+  setTailoringEditedTexts: (editedTexts: Record<string, string>) => void
+  // Set once an "Apply Selected Changes" call succeeds; deliberately
+  // never cleared by a later failed apply/export (mirrors the superseded
+  // `tailoredResumeResult`'s exact contract) so a failed retry can't wipe
+  // out the last good result. Every download control and the Stage 5
+  // preview read this, never a page-local copy.
+  finalTailoredResume: PersistedFinalTailoredResume | null
+  setFinalTailoredResume: (result: PersistedFinalTailoredResume | null) => void
+  tailoringValidationReport: FinalValidationReport | null
+  setTailoringValidationReport: (report: FinalValidationReport | null) => void
+  tailoringAvailableExportFormats: ExportFormat[]
+  setTailoringAvailableExportFormats: (formats: ExportFormat[]) => void
+  tailoringSourceFormat: SourceFormat | null
+  setTailoringSourceFormat: (format: SourceFormat | null) => void
+
   clearSession: () => void
 }
 
@@ -71,9 +101,20 @@ export function ResumeSessionProvider({
   >(null)
   const [careerConversationStatus, setCareerConversationStatus] =
     useState<CareerConversationStatus | null>(null)
-  const [tailoredResumeResult, setTailoredResumeResult] = useState<TailorResumeResult | null>(
-    null,
-  )
+
+  const [tailoringPlan, setTailoringPlan] = useState<GenerateSuggestionsResponse | null>(null)
+  const [tailoringPlanStatus, setTailoringPlanStatus] = useState<TailoringPlanStatus>('idle')
+  const [tailoringSelections, setTailoringSelections] = useState<string[]>([])
+  const [tailoringCustomInstructions, setTailoringCustomInstructions] = useState('')
+  const [tailoringEditedTexts, setTailoringEditedTexts] = useState<Record<string, string>>({})
+  const [finalTailoredResume, setFinalTailoredResume] =
+    useState<PersistedFinalTailoredResume | null>(null)
+  const [tailoringValidationReport, setTailoringValidationReport] =
+    useState<FinalValidationReport | null>(null)
+  const [tailoringAvailableExportFormats, setTailoringAvailableExportFormats] = useState<
+    ExportFormat[]
+  >([])
+  const [tailoringSourceFormat, setTailoringSourceFormat] = useState<SourceFormat | null>(null)
 
   // Reads storage exactly once. Guarded with a ref (not just an empty
   // dependency array) so React 18 StrictMode's dev-only double effect
@@ -95,7 +136,15 @@ export function ResumeSessionProvider({
       setStatus(persisted.status)
       setActiveCareerConversationSessionId(persisted.activeCareerConversationSessionId)
       setCareerConversationStatus(persisted.careerConversationStatus)
-      setTailoredResumeResult(persisted.tailoredResumeResult)
+      setTailoringPlan(persisted.tailoringPlan)
+      setTailoringPlanStatus(persisted.tailoringPlanStatus)
+      setTailoringSelections(persisted.tailoringSelections)
+      setTailoringCustomInstructions(persisted.tailoringCustomInstructions)
+      setTailoringEditedTexts(persisted.tailoringEditedTexts)
+      setFinalTailoredResume(persisted.finalTailoredResume)
+      setTailoringValidationReport(persisted.tailoringValidationReport)
+      setTailoringAvailableExportFormats(persisted.tailoringAvailableExportFormats)
+      setTailoringSourceFormat(persisted.tailoringSourceFormat)
     }
     setHydrationStatus('hydrated')
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -115,7 +164,15 @@ export function ResumeSessionProvider({
       status: normalizeStatus(status),
       activeCareerConversationSessionId,
       careerConversationStatus,
-      tailoredResumeResult,
+      tailoringPlan,
+      tailoringPlanStatus: normalizeTailoringPlanStatus(tailoringPlanStatus),
+      tailoringSelections,
+      tailoringCustomInstructions,
+      tailoringEditedTexts,
+      finalTailoredResume,
+      tailoringValidationReport,
+      tailoringAvailableExportFormats,
+      tailoringSourceFormat,
     })
   }, [
     hydrationStatus,
@@ -125,7 +182,15 @@ export function ResumeSessionProvider({
     status,
     activeCareerConversationSessionId,
     careerConversationStatus,
-    tailoredResumeResult,
+    tailoringPlan,
+    tailoringPlanStatus,
+    tailoringSelections,
+    tailoringCustomInstructions,
+    tailoringEditedTexts,
+    finalTailoredResume,
+    tailoringValidationReport,
+    tailoringAvailableExportFormats,
+    tailoringSourceFormat,
     storage,
   ])
 
@@ -136,7 +201,15 @@ export function ResumeSessionProvider({
     setStatus('idle')
     setActiveCareerConversationSessionId(null)
     setCareerConversationStatus(null)
-    setTailoredResumeResult(null)
+    setTailoringPlan(null)
+    setTailoringPlanStatus('idle')
+    setTailoringSelections([])
+    setTailoringCustomInstructions('')
+    setTailoringEditedTexts({})
+    setFinalTailoredResume(null)
+    setTailoringValidationReport(null)
+    setTailoringAvailableExportFormats([])
+    setTailoringSourceFormat(null)
     storage.clear()
   }
 
@@ -154,8 +227,24 @@ export function ResumeSessionProvider({
     setActiveCareerConversationSessionId,
     careerConversationStatus,
     setCareerConversationStatus,
-    tailoredResumeResult,
-    setTailoredResumeResult,
+    tailoringPlan,
+    setTailoringPlan,
+    tailoringPlanStatus,
+    setTailoringPlanStatus,
+    tailoringSelections,
+    setTailoringSelections,
+    tailoringCustomInstructions,
+    setTailoringCustomInstructions,
+    tailoringEditedTexts,
+    setTailoringEditedTexts,
+    finalTailoredResume,
+    setFinalTailoredResume,
+    tailoringValidationReport,
+    setTailoringValidationReport,
+    tailoringAvailableExportFormats,
+    setTailoringAvailableExportFormats,
+    tailoringSourceFormat,
+    setTailoringSourceFormat,
     clearSession,
   }
 
