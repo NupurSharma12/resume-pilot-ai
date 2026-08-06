@@ -258,3 +258,61 @@ async def test_concurrent_answers_for_same_question_return_409_not_500(api_clien
     body = final.json()
     assert body["status"] == "complete"
     assert len(body["history"]) == 1
+
+
+async def test_internal_turn_failure_leaves_session_recoverable_not_corrupted(
+    api_client_factory,
+) -> None:
+    """Regression test for the session-corruption bug fixed in `CareerConversationWorkflow`.
+
+    A failure while generating the *next* turn (standing in here for a
+    schema-invalid LLM response, an inconsistent should_stop/question
+    decision, or every provider in the chain failing) must not silently
+    consume the candidate's answer with no replacement question. Asserts
+    the full recoverable story end to end, through the real HTTP layer:
+    the failing request surfaces as a 500 (this app's established
+    convention for an unclassified internal failure -- see
+    `analyze.py`/`tailor_resume.py`), a `GET` immediately afterward shows
+    the session exactly as it was *before* the failed request (same open
+    question, same empty history, still `in_progress`), and resubmitting
+    the same answer afterward succeeds normally with no duplication.
+    """
+    client = await api_client_factory(
+        [
+            _continue_decision(confidence=30),
+            RuntimeError("all providers failed"),
+            _continue_decision(confidence=50),
+        ]
+    )
+    start_response = await client.post("/v1/career-conversation", json=_START_PAYLOAD)
+    session_id = start_response.json()["session_id"]
+    question_before = start_response.json()["current_question"]
+
+    with pytest.raises(RuntimeError, match="all providers failed"):
+        await client.post(
+            f"/v1/career-conversation/{session_id}/answer",
+            json={"answer": "I used React for the internal dashboard."},
+        )
+
+    # The session survived the failure completely intact.
+    after_failure = await client.get(f"/v1/career-conversation/{session_id}")
+    assert after_failure.status_code == 200
+    after_failure_body = after_failure.json()
+    assert after_failure_body["status"] == "in_progress"
+    assert after_failure_body["history"] == []
+    assert after_failure_body["current_question"] == question_before
+
+    # A client's own retry -- resubmitting the same answer against the
+    # still-open question -- now succeeds normally, exactly as if the
+    # failed attempt had never happened. Same `client`/session: its
+    # gateway's third queued decision is what this retry consumes.
+    retry_response = await client.post(
+        f"/v1/career-conversation/{session_id}/answer",
+        json={"answer": "I used React for the internal dashboard."},
+    )
+    assert retry_response.status_code == 200
+    retry_body = retry_response.json()
+    assert len(retry_body["history"]) == 1
+    assert retry_body["history"][0]["answer"] == "I used React for the internal dashboard."
+    assert retry_body["status"] == "in_progress"
+    assert retry_body["current_question"] is not None

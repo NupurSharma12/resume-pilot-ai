@@ -53,7 +53,11 @@ class FakeGateway:
     code that happens to look correct.
     """
 
-    def __init__(self, decisions: list[ConversationTurnDecision], delay_seconds: float = 0) -> None:
+    def __init__(
+        self,
+        decisions: list[ConversationTurnDecision | BaseException],
+        delay_seconds: float = 0,
+    ) -> None:
         self._decisions = list(decisions)
         self._delay_seconds = delay_seconds
         self.call_count = 0
@@ -66,7 +70,14 @@ class FakeGateway:
             await asyncio.sleep(self._delay_seconds)
         assert self._decisions, "FakeGateway called more times than decisions were programmed."
         self.call_count += 1
-        return self._decisions.pop(0)
+        item = self._decisions.pop(0)
+        # An `Exception` in the queue is raised instead of returned --
+        # lets tests simulate a provider failure (e.g. standing in for
+        # `GatewayChainExhaustedError`) at a specific turn without a
+        # second fake class.
+        if isinstance(item, BaseException):
+            raise item
+        return item
 
     async def stream(self, request: LLMRequest) -> AsyncIterator[str]:
         raise NotImplementedError("Unused by CareerConversationWorkflow.")
@@ -283,3 +294,101 @@ async def test_hard_stop_at_max_turns_without_extra_gateway_call(
     assert session.turn_count == MAX_CONVERSATION_TURNS
     assert "maximum" in (session.stop_reason or "").lower()
     assert gateway.call_count == MAX_CONVERSATION_TURNS
+
+
+# --- Resilience: a failed turn must never corrupt the session ---------
+#
+# Regression coverage for the bug documented in
+# `career_conversation_workflow.py`'s module docstring: recording the
+# answer *before* the next turn's decision was known left a session with
+# its answer already consumed and no replacement question if that second
+# step failed. Every test below drives a real failure at that exact point
+# and asserts the session is byte-for-byte unchanged from immediately
+# before the failing call -- not just "didn't crash the process."
+
+
+async def test_submit_answer_preserves_session_when_next_turn_decision_is_inconsistent(
+    resume_analysis: ResumeAnalysisResult,
+) -> None:
+    bad_decision = ConversationTurnDecision(
+        confidence=40, should_stop=False
+    )  # missing next-turn fields
+    gateway = FakeGateway([_continue_decision(confidence=30), bad_decision])
+    workflow = CareerConversationWorkflow(CareerConversationPromptBuilder(), gateway)
+    session = _new_session(resume_analysis)
+    await workflow.start_conversation(session)
+    question_before = session.current_question
+    history_before = list(session.history)
+
+    with pytest.raises(ConversationTurnInconsistentError):
+        await workflow.submit_answer(session, "I used React for the internal dashboard.")
+
+    assert session.current_question == question_before
+    assert session.history == history_before
+    assert session.history == []
+    assert session.status.value == "in_progress"
+    assert session.turn_count == 0
+
+
+async def test_submit_answer_preserves_session_when_gateway_fails(
+    resume_analysis: ResumeAnalysisResult,
+) -> None:
+    """Stands in for every provider in the chain failing (`GatewayChainExhaustedError`)."""
+    gateway = FakeGateway([_continue_decision(confidence=30), RuntimeError("all providers failed")])
+    workflow = CareerConversationWorkflow(CareerConversationPromptBuilder(), gateway)
+    session = _new_session(resume_analysis)
+    await workflow.start_conversation(session)
+    question_before = session.current_question
+
+    with pytest.raises(RuntimeError, match="all providers failed"):
+        await workflow.submit_answer(session, "I used React for the internal dashboard.")
+
+    assert session.current_question == question_before
+    assert session.history == []
+    assert session.status.value == "in_progress"
+
+
+async def test_start_conversation_leaves_fresh_session_untouched_on_failure(
+    resume_analysis: ResumeAnalysisResult,
+) -> None:
+    gateway = FakeGateway([RuntimeError("all providers failed")])
+    workflow = CareerConversationWorkflow(CareerConversationPromptBuilder(), gateway)
+    session = _new_session(resume_analysis)
+
+    with pytest.raises(RuntimeError, match="all providers failed"):
+        await workflow.start_conversation(session)
+
+    assert session.current_question is None
+    assert session.history == []
+    assert session.status.value == "in_progress"
+
+
+async def test_retry_after_a_failed_turn_succeeds_without_losing_or_duplicating_the_answer(
+    resume_analysis: ResumeAnalysisResult,
+) -> None:
+    """The end-to-end recovery story: a failed turn, then a successful retry, is exactly as if
+    the failed attempt never happened -- one recorded answer, one new question, nothing lost.
+    """
+    gateway = FakeGateway(
+        [
+            _continue_decision(confidence=30),
+            RuntimeError("all providers failed"),
+            _continue_decision(confidence=50),
+        ]
+    )
+    workflow = CareerConversationWorkflow(CareerConversationPromptBuilder(), gateway)
+    session = _new_session(resume_analysis)
+    await workflow.start_conversation(session)
+
+    with pytest.raises(RuntimeError):
+        await workflow.submit_answer(session, "I used React for the internal dashboard.")
+
+    # Retry with the same answer -- exactly what the frontend's existing
+    # "Try Again" does, since it never clears the answer box on failure.
+    await workflow.submit_answer(session, "I used React for the internal dashboard.")
+
+    assert session.turn_count == 1
+    assert session.history[0].answer == "I used React for the internal dashboard."
+    assert session.current_question is not None
+    assert session.status.value == "in_progress"
+    assert gateway.call_count == 3

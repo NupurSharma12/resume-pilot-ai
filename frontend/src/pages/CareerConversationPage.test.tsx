@@ -1,6 +1,6 @@
 import { StrictMode, type ReactNode } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, Outlet } from 'react-router-dom'
 import CareerConversationPage from './CareerConversationPage'
 import * as careerConversationApi from '../lib/careerConversationApi'
@@ -243,3 +243,121 @@ describe('CareerConversationPage restoration', () => {
 function StrictModeHarness({ children }: { children: ReactNode }) {
   return <StrictMode>{children}</StrictMode>
 }
+
+describe('CareerConversationPage answer submission', () => {
+  async function renderReadyPage() {
+    mockedUseResumeSession.mockReturnValue(
+      makeResumeSessionValue({ activeCareerConversationSessionId: 'conv-1' }),
+    )
+    mockedApi.getCareerConversation.mockResolvedValue(fixtureSession)
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByText(fixtureSession.current_question!.question)).toBeInTheDocument(),
+    )
+  }
+
+  it('submits the answer and shows the next question on success', async () => {
+    await renderReadyPage()
+    const nextSession = {
+      ...fixtureSession,
+      history: [
+        {
+          topic: fixtureSession.current_question!.topic,
+          question: fixtureSession.current_question!.question,
+          answer: 'I led the migration.',
+          assistant_response: null,
+        },
+      ],
+      current_question: {
+        topic: 'Ownership',
+        question: 'Tell me about your ownership of the project.',
+        evidence_goal: 'Assess ownership.',
+        estimated_impact: 'high' as const,
+        assistant_response: null,
+      },
+    }
+    mockedApi.submitCareerConversationAnswer.mockResolvedValue(nextSession)
+
+    fireEvent.change(screen.getByPlaceholderText(/share your answer/i), {
+      target: { value: 'I led the migration.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Tell me about your ownership of the project.'),
+      ).toBeInTheDocument(),
+    )
+    expect(screen.getByPlaceholderText(/share your answer/i)).toHaveValue('')
+  })
+
+  it('on a 409, automatically refetches and resumes with the authoritative state instead of showing an error', async () => {
+    await renderReadyPage()
+    const authoritativeSession = {
+      ...fixtureSession,
+      status: 'complete' as const,
+      current_question: null,
+      stop_reason: 'Enough evidence recovered.',
+      history: [
+        {
+          topic: fixtureSession.current_question!.topic,
+          question: fixtureSession.current_question!.question,
+          answer: 'Someone else already answered this.',
+          assistant_response: null,
+        },
+      ],
+    }
+    mockedApi.submitCareerConversationAnswer.mockRejectedValue(
+      new ApiError('This conversation has already moved on from that question.', {
+        cause: 'conflict',
+      }),
+    )
+    mockedApi.getCareerConversation.mockResolvedValueOnce(authoritativeSession)
+
+    fireEvent.change(screen.getByPlaceholderText(/share your answer/i), {
+      target: { value: 'I led the migration.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText(/career conversation complete/i)).toBeInTheDocument(),
+    )
+    // No error state shown at any point -- this was a recoverable sync event.
+    expect(screen.queryByText(/conversation didn't load/i)).not.toBeInTheDocument()
+    expect(mockedApi.getCareerConversation).toHaveBeenLastCalledWith(fixtureSession.session_id)
+  })
+
+  it('falls back to the error state if the post-409 refetch itself also fails', async () => {
+    await renderReadyPage()
+    mockedApi.submitCareerConversationAnswer.mockRejectedValue(
+      new ApiError('conflict', { cause: 'conflict' }),
+    )
+    mockedApi.getCareerConversation.mockRejectedValueOnce(new ApiError('network down'))
+
+    fireEvent.change(screen.getByPlaceholderText(/share your answer/i), {
+      target: { value: 'I led the migration.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    await waitFor(() => expect(screen.getByText(/conversation didn't load/i)).toBeInTheDocument())
+  })
+
+  it('shows the normal error state (no auto-recovery) for a non-409 failure', async () => {
+    await renderReadyPage()
+    mockedApi.submitCareerConversationAnswer.mockRejectedValue(
+      new ApiError('Submitting your answer failed (HTTP 500).'),
+    )
+
+    fireEvent.change(screen.getByPlaceholderText(/share your answer/i), {
+      target: { value: 'I led the migration.' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText(/submitting your answer failed/i)).toBeInTheDocument(),
+    )
+    // Only the initial restore -- no post-failure recovery refetch for a
+    // plain (non-409) failure.
+    expect(mockedApi.getCareerConversation).toHaveBeenCalledTimes(1)
+  })
+})
