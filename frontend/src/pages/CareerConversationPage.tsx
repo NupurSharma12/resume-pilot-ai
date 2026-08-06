@@ -161,6 +161,27 @@ export default function CareerConversationPage() {
       setAnswer('')
       setApiStatus('ready')
     } catch (err) {
+      // A 409 means the session itself is fine -- it already moved on
+      // from the question just answered (it completed, or a concurrent
+      // request advanced it first; see `submitCareerConversationAnswer`'s
+      // docstring). Treat it as a synchronization event, not a failure:
+      // refetch the authoritative state and resume from there instead of
+      // showing an error the user would have to manually dismiss. The
+      // stale answer text is cleared either way -- whatever question it
+      // was written for is no longer the one on screen.
+      if (err instanceof ApiError && err.cause === 'conflict') {
+        try {
+          const latest = await getCareerConversation(session.session_id)
+          setSession(latest)
+          setCareerConversationStatus(latest.status)
+          setAnswer('')
+          setApiStatus('ready')
+          return
+        } catch {
+          // Refetching itself failed -- nothing left to silently recover
+          // with, fall through to the normal error path below.
+        }
+      }
       setFailedAction('submit')
       setErrorMessage(
         err instanceof ApiError ? err.message : 'An unexpected error occurred. Please try again.',

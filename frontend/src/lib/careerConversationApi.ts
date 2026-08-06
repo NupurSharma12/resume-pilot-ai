@@ -68,6 +68,18 @@ export async function getCareerConversation(sessionId: string): Promise<Conversa
 // Calls the backend's POST /v1/career-conversation/{sessionId}/answer and
 // returns the updated session — either the next question, or a completed
 // session with no current question.
+//
+// A 409 is classified with `cause: 'conflict'` (mirroring `getCareerConversation`'s
+// `cause: 'not_found'` for a 404) so callers can distinguish it from any
+// other failure. Per the backend's own documentation of this status code
+// (see `submit_career_conversation_answer`'s docstring), a 409 here always
+// means the *session itself* is fine — it means this specific answer no
+// longer applies to the session's current state (it already completed, or
+// a concurrent request already advanced it past the question being
+// answered) — never that anything was lost. That's exactly the condition
+// under which a caller can safely recover by refetching the session's
+// current state instead of surfacing a hard error (see
+// `CareerConversationPage.handleSubmitAnswer`).
 export async function submitCareerConversationAnswer(
   sessionId: string,
   answer: string,
@@ -81,6 +93,12 @@ export async function submitCareerConversationAnswer(
     })
   } catch {
     throw new ApiError('Could not reach the conversation service. Is the backend running?')
+  }
+
+  if (response.status === 409) {
+    throw new ApiError('This conversation has already moved on from that question.', {
+      cause: 'conflict',
+    })
   }
 
   if (!response.ok) {
