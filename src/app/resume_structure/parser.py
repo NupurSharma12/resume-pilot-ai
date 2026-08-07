@@ -26,7 +26,11 @@ one output item.
 
 from app.models.resume_structure import ResumeItem, ResumeSection, StructuredResume
 
-_BULLET_PREFIXES = "•-–—*◦▪"
+# Exported (not module-private) so `app.document_editing.docx_structure_mapper`
+# can reuse the exact same heading/bullet heuristics when mapping a DOCX's
+# real paragraphs to a `StructuredResume` -- one heuristic, shared, rather
+# than two copies that could silently drift apart.
+BULLET_PREFIXES = "•-–—*◦▪"
 
 _COMMON_HEADINGS = {
     "summary",
@@ -56,7 +60,7 @@ _MAX_HEADING_LENGTH = 40
 _MAX_HEADING_WORDS = 6
 
 
-def _looks_like_heading(line: str) -> bool:
+def looks_like_heading(line: str) -> bool:
     """Decide whether `line` is likely a section heading, not resume content.
 
     Deliberately conservative: false negatives (a real heading missed,
@@ -67,7 +71,7 @@ def _looks_like_heading(line: str) -> bool:
     stripped = line.strip().rstrip(":")
     if not stripped or len(stripped) > _MAX_HEADING_LENGTH:
         return False
-    if stripped[0] in _BULLET_PREFIXES:
+    if stripped[0] in BULLET_PREFIXES:
         return False
     if stripped.lower() in _COMMON_HEADINGS:
         return True
@@ -111,9 +115,9 @@ def _split_items(raw_lines: list[str]) -> list[str]:
         if not stripped:
             flush()
             continue
-        if stripped[0] in _BULLET_PREFIXES:
+        if stripped[0] in BULLET_PREFIXES:
             flush()
-            content = stripped.lstrip(_BULLET_PREFIXES).strip()
+            content = stripped.lstrip(BULLET_PREFIXES).strip()
             if content:
                 items.append(content)
             continue
@@ -145,7 +149,7 @@ class ResumeStructureParser:
         current_heading = ""
         current_lines: list[str] = []
         for line in resume_text.splitlines():
-            if _looks_like_heading(line):
+            if looks_like_heading(line):
                 raw_sections.append((current_heading, current_lines))
                 current_heading = line.strip().rstrip(":")
                 current_lines = []
