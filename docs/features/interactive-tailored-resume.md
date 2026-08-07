@@ -434,7 +434,7 @@ nothing calls them). Every export is therefore built from
 |---|---|---|
 | TXT | `approximate_style` | Content-faithful re-render (`StructuredResume.to_text()`); exact original whitespace/line breaks are not guaranteed to match |
 | Markdown | `approximate_style` | Same content-faithfulness; rendered as clean `##`/`-` Markdown regardless of the original file's exact Markdown syntax |
-| DOCX | `regenerated_template` | Always a freshly generated `python-docx` document in a clean style — the original file's fonts/colors/layout were never retained to reproduce |
+| DOCX | `regenerated_template` | Always a freshly generated `python-docx` document in a clean style — the original file's fonts/colors/layout were never retained to reproduce. A high-fidelity, edit-in-place engine exists (`app.document_editing`, see [`docs/features/high-fidelity-docx-editing.md`](high-fidelity-docx-editing.md)) but is not yet wired into this export path — see that doc's "Integration status" for exactly what's still needed (original bytes never reach the backend today). |
 | PDF | `regenerated_template` | Always a freshly generated `reportlab` document — never a reproduction of any original PDF's layout, per this feature's explicit requirement not to overclaim PDF preservation |
 
 `exact_original` is a defined value in `FormatFidelity` but is never
@@ -480,8 +480,12 @@ never be pre-selected as if it were "the original format."
   may produce different section/item boundaries than a human would draw.
 - **In-memory plan store.** A generated plan does not survive a backend
   restart or move between worker processes (see "Trust boundary" above).
-- **No PDF/DOCX exact-layout preservation.** By design for this version —
-  see "Export behavior" above.
+- **No PDF/DOCX exact-layout preservation reachable from export yet.** A
+  DOCX edit-in-place engine exists (see
+  [`docs/features/high-fidelity-docx-editing.md`](high-fidelity-docx-editing.md))
+  but isn't wired into the upload/generate/export flow — DOCX export
+  still always regenerates from scratch today. PDF has no equivalent
+  engine at all yet.
 - **Coarse conflict policy.** Two suggestions are treated as conflicting
   whenever they'd mutate the same item or insert at the same anchor
   position, even in cases a more advanced merge algorithm could
@@ -503,8 +507,12 @@ never be pre-selected as if it were "the original format."
 - Real plan persistence (Redis/database) so plans survive restarts and
   multi-worker deployments.
 - Retained, round-trippable original file bytes for genuine
-  `exact_original` fidelity on at least DOCX (PDF layout preservation is a
-  substantially harder problem and would need its own design).
+  `exact_original`/`approximate_style` fidelity on DOCX — the editing
+  engine to consume them already exists (see
+  [`docs/features/high-fidelity-docx-editing.md`](high-fidelity-docx-editing.md));
+  what's missing is the upload/storage plumbing to get bytes to it. PDF
+  layout preservation is a substantially harder problem and would need
+  its own design.
 - Resume version history across multiple tailoring sessions (explicitly
   out of scope for this feature — see `ROADMAP.md`'s "Multiple Resume
   Versions" item, same open item the superseded pipeline's docs already
