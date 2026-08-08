@@ -57,7 +57,10 @@ export const OPERATION_ACTION_LABELS: Record<SuggestionOperation, string> = {
 // happened to also cite resume evidence.
 const RESUME_EVIDENCE_LABEL = /^Resume: (.+)$/
 
-function prettifyHeading(rawHeading: string): string {
+// Exported for `resumeSectionDiff`-based previews, which derive section
+// headings straight from plain text (never a `target_section_id`) and need
+// the exact same SHOUT-CASE-to-Title-Case treatment applied here.
+export function prettifyHeading(rawHeading: string): string {
   const trimmed = rawHeading.trim()
   if (!trimmed) return trimmed
   const isShoutCase = trimmed === trimmed.toUpperCase() && /[A-Z]/.test(trimmed)
@@ -323,8 +326,14 @@ export function buildConflictSummaries(suggestions: TailoringSuggestion[]): Map<
   const byId = new Map(suggestions.map((s) => [s.suggestion_id, s]))
   const map = new Map<string, string[]>()
   for (const suggestion of suggestions) {
-    if (suggestion.conflicts_with.length === 0) continue
-    const summaries = suggestion.conflicts_with
+    // Defensive `?? []`, not just a type-level guarantee: a suggestion
+    // rehydrated from a persisted session saved before this field existed
+    // could still reach here with it missing despite the type saying
+    // otherwise (see RESUME_SESSION_VERSION's docstring for the version
+    // bump that's the primary defense against that).
+    const conflictsWith = suggestion.conflicts_with ?? []
+    if (conflictsWith.length === 0) continue
+    const summaries = conflictsWith
       .map((id) => byId.get(id))
       .filter((s): s is TailoringSuggestion => s !== undefined)
       .map((s) => summarizeSuggestionChange(s))

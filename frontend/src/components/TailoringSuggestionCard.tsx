@@ -1,10 +1,11 @@
-import { useState, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, Star } from 'lucide-react'
 import Badge from './Badge'
 import Button from './Button'
+import SideBySideDiff from './SideBySideDiff'
+import { buildSuggestionDiffHunks } from '../lib/resumeSectionDiff'
 import type { TailoringSuggestion } from '../data/tailoringSuggestionsTypes'
 import {
-  computeAppendedDelta,
   getImpactLevel,
   groupEvidenceSources,
   IMPACT_LABELS,
@@ -99,6 +100,21 @@ interface TailoringSuggestionCardProps {
   // this note explains why, so it never looks like the UI silently
   // unchecked something the candidate picked.
   conflictSummaries: string[]
+  // True once this suggestion has actually been committed by a successful
+  // "Apply Now" in some earlier phase (see TailoredResumePage's
+  // `appliedSuggestionIds`, derived from `finalTailoredResume`) -- distinct
+  // from `accepted`, which just means "currently checked." An applied
+  // suggestion is always accepted, but stays locked: it can't be
+  // unchecked via the checkbox (only reverted, see `onRevertApplied`),
+  // and Customize is hidden, since editing text that's already part of
+  // the committed resume has no defined meaning here.
+  isApplied: boolean
+  // Undoes an applied suggestion -- UI-state only (see this feature's
+  // docs on why: the backend's apply is a stateless, pure computation
+  // from the original resume, so "un-applying" is nothing more than no
+  // longer including this id the next time Apply Now runs). Omitted
+  // (never called) for a suggestion that isn't applied.
+  onRevertApplied: () => void
 }
 
 // Renders one suggestion for Stage 2 review as a compact resume-coach
@@ -122,6 +138,8 @@ export default function TailoringSuggestionCard({
   onEditedTextChange,
   revalidationError,
   conflictSummaries,
+  isApplied,
+  onRevertApplied,
 }: TailoringSuggestionCardProps) {
   const [isEditing, setIsEditing] = useState(false)
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
@@ -136,13 +154,16 @@ export default function TailoringSuggestionCard({
   const displayedText = editedText ?? suggestion.suggested_text
   const isEdited = editedText !== null
 
-  // The full text shown once "Preview Change" is expanded -- an append
-  // still shows only the delta (never the whole resulting paragraph),
-  // matching what the collapsed summary line already teased.
-  const previewText =
-    suggestion.operation === 'append' && suggestion.current_text !== null
-      ? computeAppendedDelta(suggestion.current_text, displayedText)
-      : displayedText
+  // A read-only, side-by-side comparator for this one suggestion's actual
+  // textual transformation -- current_text -> displayedText -- driven only
+  // by this suggestion, regardless of whether it's currently selected (see
+  // resumeSectionDiff.ts's `buildSuggestionDiffHunks` for exactly how each
+  // operation's shape -- append/insert/update/replace/remove/add_emphasis
+  // -- turns into hunks).
+  const diffHunks = useMemo(
+    () => buildSuggestionDiffHunks(suggestion.current_text, displayedText),
+    [suggestion.current_text, displayedText],
+  )
 
   function startEditing() {
     setDraftText(displayedText)
@@ -169,14 +190,21 @@ export default function TailoringSuggestionCard({
   }
 
   return (
-    <li className="rounded-2xl border border-gray-200 bg-white p-5">
+    <li
+      className={`rounded-2xl border p-5 ${
+        isApplied ? 'border-gray-100 bg-gray-50/70 opacity-75' : 'border-gray-200 bg-white'
+      }`}
+    >
       {/* 1. WHAT changes -- section + a one-line, plain-language summary. */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="indigo">{OPERATION_ACTION_LABELS[suggestion.operation]}</Badge>
+            <Badge variant={isApplied ? 'gray' : 'indigo'}>
+              {OPERATION_ACTION_LABELS[suggestion.operation]}
+            </Badge>
             <h3 className="text-sm font-semibold text-gray-900">{sectionName}</h3>
-            {isEdited && <Badge variant="amber">Edited</Badge>}
+            {isApplied && <Badge variant="green">Applied</Badge>}
+            {isEdited && !isApplied && <Badge variant="amber">Edited</Badge>}
           </div>
           <p className="mt-1.5 text-sm text-gray-700">{summarizeSuggestionChange(suggestion, displayedText)}</p>
         </div>
@@ -190,35 +218,51 @@ export default function TailoringSuggestionCard({
         <p className="mt-1 text-sm text-gray-600">{suggestion.reason}</p>
       </div>
 
-      {/* Accept (checkbox, keeps Select All/Clear All working) + Customize. */}
+      {/* Accept (checkbox, keeps Select All/Clear All working) + Customize --
+          replaced by a locked "Applied" state + Undo once committed. */}
       <div className="mt-4 flex items-center gap-4">
-        <label className="inline-flex cursor-pointer items-center gap-2 select-none">
+        <label
+          className={`inline-flex items-center gap-2 select-none ${isApplied ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+        >
           <input
             type="checkbox"
             checked={accepted}
+            disabled={isApplied}
             onChange={(event) => onToggleAccepted(event.target.checked)}
             aria-label={`Accept suggestion: ${summarizeSuggestionChange(suggestion, displayedText)}`}
-            className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+            className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 disabled:cursor-not-allowed"
           />
           <span className="text-sm font-semibold text-gray-900">
-            {accepted ? 'Accepted' : 'Accept'}
+            {isApplied ? 'Applied' : accepted ? 'Accepted' : 'Accept'}
           </span>
         </label>
-        <button
-          type="button"
-          onClick={startEditing}
-          className="text-sm font-medium text-indigo-600 hover:text-indigo-700"
-        >
-          Customize
-        </button>
-        {isEdited && (
+        {isApplied ? (
           <button
             type="button"
-            onClick={resetToOriginal}
-            className="text-xs font-medium text-gray-500 hover:text-gray-700"
+            onClick={onRevertApplied}
+            className="text-sm font-medium text-gray-500 hover:text-gray-700"
           >
-            Reset
+            Undo
           </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={startEditing}
+              className="text-sm font-medium text-indigo-600 hover:text-indigo-700"
+            >
+              Customize
+            </button>
+            {isEdited && (
+              <button
+                type="button"
+                onClick={resetToOriginal}
+                className="text-xs font-medium text-gray-500 hover:text-gray-700"
+              >
+                Reset
+              </button>
+            )}
+          </>
         )}
       </div>
 
@@ -285,7 +329,7 @@ export default function TailoringSuggestionCard({
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-gray-800">{previewText}</p>
+              <SideBySideDiff hunks={diffHunks} />
             )}
           </DisclosureRow>
         )}

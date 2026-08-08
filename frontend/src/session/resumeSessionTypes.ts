@@ -34,7 +34,16 @@ export type CareerConversationStatus = 'in_progress' | 'complete'
 export type TailoringPlanStatus = 'idle' | 'generating' | 'error'
 export type PersistedTailoringPlanStatus = 'idle' | 'error'
 
-export const RESUME_SESSION_VERSION = 2 as const
+// Bumped from 1: `TailoringSuggestion` gained a required `conflicts_with`
+// field (see docs/features/interactive-tailored-resume.md's atomic-
+// suggestions section) that a session persisted by a prior build's
+// `tailoringPlan.suggestions` won't carry. `tailoringPlan`'s own content
+// is deliberately never deep-validated below (see
+// `isSupportedPersistedSession`'s docstring in resumeSessionStorage.ts),
+// so an un-bumped version here would have let that stale plan rehydrate
+// and crash the page the moment anything read `.conflicts_with` off an
+// old suggestion.
+export const RESUME_SESSION_VERSION = 3 as const
 
 // A compact record of the last successfully applied final resume —
 // deliberately just the rendered text and which suggestions produced it,
