@@ -90,6 +90,26 @@ def _remove_suggestion(suggestion_id: str = "s2") -> TailoringSuggestion:
     )
 
 
+def _update_suggestion(
+    suggestion_id: str = "s5", suggested_text: str = "Python expert"
+) -> TailoringSuggestion:
+    return TailoringSuggestion(
+        suggestion_id=suggestion_id,
+        target_section_id="section-0",
+        target_item_id="section-0-item-0",
+        operation=SuggestionOperation.UPDATE,
+        current_text="Python",
+        suggested_text=suggested_text,
+        reason="Reword for emphasis.",
+        evidence_ids=["resume-section-0-item-0"],
+        evidence_sources=["Resume: SKILLS"],
+        confidence=85,
+        selected_by_default=False,
+        validation_status=SuggestionValidationStatus.SUPPORTED_BY_ORIGINAL_RESUME,
+        validation_issues=[],
+    )
+
+
 def _insert_after_suggestion(suggestion_id: str = "s3") -> TailoringSuggestion:
     return TailoringSuggestion(
         suggestion_id=suggestion_id,
@@ -178,10 +198,11 @@ def test_unknown_suggestion_id_is_rejected() -> None:
         )
 
 
-def test_two_selected_suggestions_targeting_the_same_item_conflict() -> None:
-    other_append = _append_suggestion(suggestion_id="s4")
-    other_append = other_append.model_copy(update={"suggested_text": "Python, expert level"})
-    plan = SuggestionPlan(plan_id="plan-1", suggestions=[_append_suggestion(), other_append])
+def test_two_rewrite_suggestions_targeting_the_same_item_conflict() -> None:
+    """Two alternative rewordings of the same line are genuine alternatives."""
+    plan = SuggestionPlan(
+        plan_id="plan-1", suggestions=[_update_suggestion(), _update_suggestion("s6", "Pythonista")]
+    )
     applier = SuggestionApplier()
 
     with pytest.raises(SuggestionConflictError):
@@ -189,9 +210,69 @@ def test_two_selected_suggestions_targeting_the_same_item_conflict() -> None:
             _structured_resume(),
             plan,
             _evidence_store(),
-            selected_suggestion_ids=["s1", "s4"],
+            selected_suggestion_ids=["s5", "s6"],
             edited_texts={},
         )
+
+
+def test_append_and_rewrite_of_the_same_item_conflict() -> None:
+    """An append's basis text becomes invalid once a rewrite discards it."""
+    plan = SuggestionPlan(
+        plan_id="plan-1", suggestions=[_append_suggestion(), _update_suggestion()]
+    )
+    applier = SuggestionApplier()
+
+    with pytest.raises(SuggestionConflictError):
+        applier.apply(
+            _structured_resume(),
+            plan,
+            _evidence_store(),
+            selected_suggestion_ids=["s1", "s5"],
+            edited_texts={},
+        )
+
+
+def test_multiple_independent_appends_to_the_same_item_compose() -> None:
+    """The exact motivating scenario: several atomic "add this evidence" suggestions on one item."""
+    second_append = _append_suggestion(suggestion_id="s4")
+    second_append = second_append.model_copy(update={"suggested_text": "Python, and Django"})
+    plan = SuggestionPlan(plan_id="plan-1", suggestions=[_append_suggestion(), second_append])
+    applier = SuggestionApplier()
+
+    result = applier.apply(
+        _structured_resume(),
+        plan,
+        _evidence_store(),
+        selected_suggestion_ids=["s1", "s4"],
+        edited_texts={},
+    )
+
+    skills = result.final_resume.get_section("section-0")
+    assert skills is not None
+    # Both additions land on the same item, in plan order, never
+    # overwriting one another.
+    assert skills.items[0].text == "Python, up to date, and Django"
+    assert set(result.applied_suggestion_ids) == {"s1", "s4"}
+
+
+def test_composed_appends_apply_in_plan_order_regardless_of_selection_order() -> None:
+    second_append = _append_suggestion(suggestion_id="s4")
+    second_append = second_append.model_copy(update={"suggested_text": "Python, and Django"})
+    plan = SuggestionPlan(plan_id="plan-1", suggestions=[_append_suggestion(), second_append])
+    applier = SuggestionApplier()
+
+    # Selected in the *opposite* order from the plan's own order.
+    result = applier.apply(
+        _structured_resume(),
+        plan,
+        _evidence_store(),
+        selected_suggestion_ids=["s4", "s1"],
+        edited_texts={},
+    )
+
+    skills = result.final_resume.get_section("section-0")
+    assert skills is not None
+    assert skills.items[0].text == "Python, up to date, and Django"
 
 
 def test_insert_after_does_not_conflict_with_a_mutation_of_its_own_anchor() -> None:

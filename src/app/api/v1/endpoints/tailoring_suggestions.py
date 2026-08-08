@@ -191,6 +191,7 @@ def _to_suggestion_response(suggestion: TailoringSuggestion) -> SuggestionRespon
         selected_by_default=suggestion.selected_by_default,
         validation_status=suggestion.validation_status,
         validation_issues=suggestion.validation_issues,
+        conflicts_with=suggestion.conflicts_with,
     )
 
 

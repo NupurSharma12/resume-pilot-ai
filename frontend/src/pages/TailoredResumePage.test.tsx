@@ -454,6 +454,114 @@ describe('TailoredResumePage: reviewing and selecting suggestions', () => {
   })
 })
 
+describe('TailoredResumePage: section grouping and mutually exclusive suggestions', () => {
+  // Three atomic suggestions: two independent appends to the Skills item
+  // (never conflict, per app.tailoring.conflicts) plus one Experience
+  // insertion in a different section -- covers "multiple atomic
+  // suggestions for the same section, individually selectable" and
+  // "correct UI grouping."
+  const secondAppend = {
+    ...fixtureSuggestionAppend,
+    suggestion_id: 'suggestion-2',
+    reason: 'Django experience is missing from Skills.',
+    suggested_text: 'Python, Django',
+  }
+  const planWithIndependentAppends = {
+    ...fixtureGenerateSuggestionsResponse,
+    suggestions: [fixtureSuggestionAppend, secondAppend, fixtureSuggestionInsert],
+  }
+
+  // Two alternative rewordings of the same Skills item -- mutually
+  // exclusive, annotated via `conflicts_with` exactly as
+  // `app.tailoring.conflicts.compute_conflicts` would compute it.
+  const rewriteA = {
+    ...fixtureSuggestionAppend,
+    suggestion_id: 'suggestion-a',
+    operation: 'update' as const,
+    suggested_text: 'Pythonista',
+    conflicts_with: ['suggestion-b'],
+  }
+  const rewriteB = {
+    ...fixtureSuggestionAppend,
+    suggestion_id: 'suggestion-b',
+    operation: 'update' as const,
+    suggested_text: 'Python expert',
+    conflicts_with: ['suggestion-a'],
+  }
+  const planWithConflict = {
+    ...fixtureGenerateSuggestionsResponse,
+    suggestions: [rewriteA, rewriteB],
+  }
+
+  it('groups suggestions under one heading per section, keeping each one individually selectable', () => {
+    const { container } = renderPageWithRealSession({
+      tailoringPlan: planWithIndependentAppends,
+      tailoringSelections: [],
+      tailoringAvailableExportFormats: planWithIndependentAppends.available_export_formats,
+    })
+
+    // One group heading per distinct section -- not one per suggestion --
+    // even though the two Skills suggestions target the same section.
+    const groupHeadings = Array.from(container.querySelectorAll('h3.mb-2')).map(
+      (el) => el.textContent,
+    )
+    expect(groupHeadings).toEqual(['Resume Section 1', 'Resume Section 2'])
+
+    expect(screen.getByText(fixtureSuggestionAppend.reason)).toBeInTheDocument()
+    expect(screen.getByText(secondAppend.reason)).toBeInTheDocument()
+    expect(screen.getByText(fixtureSuggestionInsert.reason)).toBeInTheDocument()
+  })
+
+  it('selects a subset of same-section suggestions independently, with no conflict between them', () => {
+    renderPageWithRealSession({
+      tailoringPlan: planWithIndependentAppends,
+      tailoringSelections: [],
+      tailoringAvailableExportFormats: planWithIndependentAppends.available_export_formats,
+    })
+
+    const checkboxes = screen.getAllByRole('checkbox')
+    fireEvent.click(checkboxes[0])
+
+    expect(screen.getByText('1 of 3 selected')).toBeInTheDocument()
+    // Selecting the first append never touches the others' state.
+    expect(checkboxes[1]).not.toBeChecked()
+    expect(checkboxes[2]).not.toBeChecked()
+
+    fireEvent.click(checkboxes[1])
+    expect(screen.getByText('2 of 3 selected')).toBeInTheDocument()
+    expect(checkboxes[0]).toBeChecked()
+    expect(checkboxes[1]).toBeChecked()
+  })
+
+  it('shows a mutually-exclusive note on suggestions that conflict', () => {
+    renderPageWithRealSession({
+      tailoringPlan: planWithConflict,
+      tailoringSelections: [],
+      tailoringAvailableExportFormats: planWithConflict.available_export_formats,
+    })
+
+    expect(screen.getAllByText(/choose only one: this conflicts with/i)).toHaveLength(2)
+  })
+
+  it('auto-deselects a conflicting suggestion when the other one is selected', () => {
+    renderPageWithRealSession({
+      tailoringPlan: planWithConflict,
+      tailoringSelections: ['suggestion-a'],
+      tailoringAvailableExportFormats: planWithConflict.available_export_formats,
+    })
+
+    const checkboxes = screen.getAllByRole('checkbox')
+    expect(checkboxes[0]).toBeChecked()
+    expect(checkboxes[1]).not.toBeChecked()
+
+    fireEvent.click(checkboxes[1])
+
+    expect(checkboxes[1]).toBeChecked()
+    expect(checkboxes[0]).not.toBeChecked()
+    expect(screen.getByText('1 of 2 selected')).toBeInTheDocument()
+  })
+})
+
 describe('TailoredResumePage: applying selected changes', () => {
   function renderWithPlan(overrides: Partial<PersistedResumeSession> = {}) {
     return renderPageWithRealSession({
@@ -536,6 +644,220 @@ describe('TailoredResumePage: applying selected changes', () => {
     )
     // The previously successful final resume must still be visible.
     expect(screen.getByText((_, el) => el?.tagName === 'PRE' && el.textContent === fixtureApplySuggestionsResponse.final_resume_text)).toBeInTheDocument()
+  })
+})
+
+describe('TailoredResumePage: stale-plan recovery (backend restart / 404)', () => {
+  // A regenerated plan: different plan_id and different suggestion_ids
+  // (matching real `TailoringSuggestionWorkflow` behavior -- ids are
+  // assigned by position within one generation call, never stable across
+  // two calls), but the same target_item_id/operation for the append
+  // suggestion, so semantic matching (not exact-id matching) is what
+  // restores it.
+  const regeneratedPlan = {
+    ...fixtureGenerateSuggestionsResponse,
+    plan_id: 'plan-456-after-restart',
+    suggestions: [
+      { ...fixtureSuggestionAppend, suggestion_id: 'suggestion-70' },
+      { ...fixtureSuggestionInsert, suggestion_id: 'suggestion-71' },
+    ],
+  }
+
+  function renderWithPlan(overrides: Partial<PersistedResumeSession> = {}) {
+    return renderPageWithRealSession({
+      tailoringPlan: fixtureGenerateSuggestionsResponse,
+      tailoringSelections: ['suggestion-0', 'suggestion-1'],
+      tailoringAvailableExportFormats: fixtureGenerateSuggestionsResponse.available_export_formats,
+      ...overrides,
+    })
+  }
+
+  function mockStalePlan404() {
+    mockedTailoringApi.applyTailoringSuggestions.mockRejectedValueOnce(
+      new ApiError('Tailoring suggestion plan not found.', { cause: 'not_found' }),
+    )
+  }
+
+  it('does not show the raw backend error when the plan is stale', async () => {
+    mockStalePlan404()
+    mockedCareerConversationApi.getCareerConversation.mockResolvedValue(fixtureCompletedSession)
+    mockedTailoringApi.generateTailoringSuggestions.mockResolvedValue(regeneratedPlan)
+    mockedTailoringApi.applyTailoringSuggestions.mockResolvedValueOnce(fixtureApplySuggestionsResponse)
+
+    renderWithPlan()
+    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText((_, el) => el?.tagName === 'PRE')).toBeInTheDocument(),
+    )
+    expect(screen.queryByText(/tailoring suggestion plan not found/i)).not.toBeInTheDocument()
+  })
+
+  it('shows a non-blocking "Refreshing tailoring suggestions…" status, not a red error, while recovering', async () => {
+    mockStalePlan404()
+    mockedCareerConversationApi.getCareerConversation.mockResolvedValue(fixtureCompletedSession)
+    // Held open so the "recovering" state is observable before it resolves.
+    let resolveGenerate: (value: typeof regeneratedPlan) => void = () => {}
+    mockedTailoringApi.generateTailoringSuggestions.mockReturnValue(
+      new Promise((resolve) => {
+        resolveGenerate = resolve
+      }),
+    )
+
+    renderWithPlan()
+    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText(/refreshing tailoring suggestions/i)).toBeInTheDocument(),
+    )
+    expect(screen.queryByText(/tailoring suggestion plan not found/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /regenerate suggestions/i })).not.toBeInTheDocument()
+
+    mockedTailoringApi.applyTailoringSuggestions.mockResolvedValueOnce(fixtureApplySuggestionsResponse)
+    resolveGenerate(regeneratedPlan)
+
+    await waitFor(() =>
+      expect(screen.queryByText(/refreshing tailoring suggestions/i)).not.toBeInTheDocument(),
+    )
+  })
+
+  it('regenerates automatically, using the resume/JD/conversation/custom instructions already in session', async () => {
+    mockStalePlan404()
+    mockedCareerConversationApi.getCareerConversation.mockResolvedValue(fixtureCompletedSession)
+    mockedTailoringApi.generateTailoringSuggestions.mockResolvedValue(regeneratedPlan)
+    mockedTailoringApi.applyTailoringSuggestions.mockResolvedValueOnce(fixtureApplySuggestionsResponse)
+
+    renderWithPlan({ tailoringCustomInstructions: 'Keep it under two pages.' })
+    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+
+    await waitFor(() =>
+      expect(mockedTailoringApi.generateTailoringSuggestions).toHaveBeenCalledWith(
+        fixtureResume.text,
+        fixtureJobDescription.text,
+        fixtureResumeAnalysis,
+        fixtureCompletedSession,
+        'Keep it under two pages.',
+        fixtureResume.fileName,
+      ),
+    )
+  })
+
+  it('restores selections by semantic match and retries apply automatically with the new plan id', async () => {
+    mockStalePlan404()
+    mockedCareerConversationApi.getCareerConversation.mockResolvedValue(fixtureCompletedSession)
+    mockedTailoringApi.generateTailoringSuggestions.mockResolvedValue(regeneratedPlan)
+    mockedTailoringApi.applyTailoringSuggestions.mockResolvedValueOnce(fixtureApplySuggestionsResponse)
+
+    // Only suggestion-0 (append) selected beforehand.
+    renderWithPlan({ tailoringSelections: ['suggestion-0'] })
+    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+
+    await waitFor(() =>
+      expect(mockedTailoringApi.applyTailoringSuggestions).toHaveBeenLastCalledWith(
+        regeneratedPlan.plan_id,
+        ['suggestion-70'],
+        {},
+      ),
+    )
+    // The user never had to click Apply a second time.
+    expect(mockedTailoringApi.applyTailoringSuggestions).toHaveBeenCalledTimes(2)
+  })
+
+  it('restores edited suggestion text onto the matched new suggestion id', async () => {
+    mockStalePlan404()
+    mockedCareerConversationApi.getCareerConversation.mockResolvedValue(fixtureCompletedSession)
+    mockedTailoringApi.generateTailoringSuggestions.mockResolvedValue(regeneratedPlan)
+    mockedTailoringApi.applyTailoringSuggestions.mockResolvedValueOnce(fixtureApplySuggestionsResponse)
+
+    renderWithPlan({
+      tailoringSelections: ['suggestion-0'],
+      tailoringEditedTexts: { 'suggestion-0': 'Python, TypeScript, and Node.js' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+
+    await waitFor(() =>
+      expect(mockedTailoringApi.applyTailoringSuggestions).toHaveBeenLastCalledWith(
+        regeneratedPlan.plan_id,
+        ['suggestion-70'],
+        { 'suggestion-70': 'Python, TypeScript, and Node.js' },
+      ),
+    )
+  })
+
+  it('shows the final resume preview after a successful automatic retry, with no second click', async () => {
+    mockStalePlan404()
+    mockedCareerConversationApi.getCareerConversation.mockResolvedValue(fixtureCompletedSession)
+    mockedTailoringApi.generateTailoringSuggestions.mockResolvedValue(regeneratedPlan)
+    mockedTailoringApi.applyTailoringSuggestions.mockResolvedValueOnce(fixtureApplySuggestionsResponse)
+
+    renderWithPlan()
+    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          (_, el) => el?.tagName === 'PRE' && el.textContent === fixtureApplySuggestionsResponse.final_resume_text,
+        ),
+      ).toBeInTheDocument(),
+    )
+  })
+
+  it('shows a friendly recovery message, not the raw backend error, when regeneration itself fails', async () => {
+    mockStalePlan404()
+    mockedCareerConversationApi.getCareerConversation.mockResolvedValue(fixtureCompletedSession)
+    mockedTailoringApi.generateTailoringSuggestions.mockRejectedValue(
+      new ApiError('Could not reach the tailoring service. Is the backend running?'),
+    )
+
+    renderWithPlan()
+    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText(/we need to regenerate your tailoring suggestions/i)).toBeInTheDocument(),
+    )
+    expect(screen.getByText(/your resume and conversation are safe/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /regenerate suggestions/i })).toBeInTheDocument()
+    expect(screen.queryByText(/could not reach the tailoring service/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/tailoring suggestion plan not found/i)).not.toBeInTheDocument()
+  })
+
+  it('the Regenerate Suggestions button retries the whole recovery flow', async () => {
+    mockStalePlan404()
+    mockedCareerConversationApi.getCareerConversation.mockResolvedValue(fixtureCompletedSession)
+    mockedTailoringApi.generateTailoringSuggestions.mockRejectedValueOnce(
+      new ApiError('Network error.'),
+    )
+
+    renderWithPlan()
+    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /regenerate suggestions/i })).toBeInTheDocument(),
+    )
+
+    mockedTailoringApi.generateTailoringSuggestions.mockResolvedValueOnce(regeneratedPlan)
+    mockedTailoringApi.applyTailoringSuggestions.mockResolvedValueOnce(fixtureApplySuggestionsResponse)
+    fireEvent.click(screen.getByRole('button', { name: /regenerate suggestions/i }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          (_, el) => el?.tagName === 'PRE' && el.textContent === fixtureApplySuggestionsResponse.final_resume_text,
+        ),
+      ).toBeInTheDocument(),
+    )
+  })
+
+  it('does not attempt recovery for a non-404 apply failure', async () => {
+    mockedTailoringApi.applyTailoringSuggestions.mockRejectedValueOnce(
+      new ApiError('Something went wrong.'),
+    )
+
+    renderWithPlan()
+    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+
+    await waitFor(() => expect(screen.getByText(/something went wrong\./i)).toBeInTheDocument())
+    expect(mockedTailoringApi.generateTailoringSuggestions).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: /regenerate suggestions/i })).not.toBeInTheDocument()
   })
 })
 

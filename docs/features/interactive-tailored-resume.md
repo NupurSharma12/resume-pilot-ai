@@ -129,12 +129,21 @@ insertions are anchored relative to an existing neighbor.
 is what the frontend uses to decide whether to show a "Current vs
 Suggested" comparison (these five) or a plain "New addition" (the two
 insert operations, where `current_text` is always `null`).
+`REWRITE_OPERATIONS = {update, replace, add_emphasis, remove}` — the
+strict subset of `REPLACEMENT_OPERATIONS` excluding `append` — is what
+`app.tailoring.conflicts.compute_conflicts` uses to tell a true
+alternative (an operation that determines an item's *entire* text) apart
+from a composable addition; see "Conflict policy" below.
 
 Every `TailoringSuggestion` also carries: `suggestion_id` (stable within
 its plan), `reason`, `evidence_ids`/`evidence_sources`, `confidence`
 (0–100, model-reported), `selected_by_default` (true only when validation
-status is one of the three "supported" statuses *and* confidence ≥ 60),
-and `validation_status`/`validation_issues`.
+status is one of the three "supported" statuses *and* confidence ≥ 60,
+and further downgraded to `false` if it conflicts with an earlier
+default-selected suggestion — see "Conflict policy"),
+`validation_status`/`validation_issues`, and `conflicts_with` (the ids of
+other suggestions in the same plan this one is mutually exclusive with;
+empty for the common case of no conflict).
 
 ### Evidence model
 
@@ -203,21 +212,53 @@ request produced (see "Trust boundary" below):
    a result outside the three "supported" statuses raises
    `SuggestionRevalidationFailedError` (→ HTTP `422`) and the edit is
    never applied.
-3. **Conflict policy:** two selected suggestions conflict if they'd both
-   determine the same physical outcome — either two mutate the same
-   target item's own content (any two of `REPLACEMENT_OPERATIONS`), or
-   two both insert at the same position relative to the same anchor (two
-   `insert_before` on the same item, or two `insert_after`). An
-   `insert_before`/`insert_after` does *not* conflict with a mutation of
-   its own anchor item — inserting a new bullet after item X while also
-   appending to X's own text are independent edits at different physical
-   positions. Any conflict raises `SuggestionConflictError` (→ HTTP
-   `409`) naming the colliding suggestion ids; nothing is silently
-   chosen.
+3. **Conflict policy** (`app.tailoring.conflicts.compute_conflicts`): a
+   single shared, pairwise function — not duplicated logic — used by
+   three call sites: `TailoringSuggestionWorkflow` (to proactively
+   annotate every suggestion's `conflicts_with` right after generation,
+   before the user has selected anything), `SuggestionApplier` (to
+   enforce it over `StructuredResume`), and `DocxDocumentEditor` (to
+   enforce it over a live DOCX). Using the same function everywhere
+   guarantees the frontend's "these are mutually exclusive" hint can
+   never disagree with what apply-time enforcement actually rejects. Two
+   suggestions on the same `target_item_id` conflict exactly when:
+   - Both are `REWRITE_OPERATIONS` (genuine alternatives — at most one
+     may be selected, since each fully determines or removes the item's
+     text).
+   - One is a rewrite and the other is `append` — the append's added text
+     is computed against the item's *original* text, which the rewrite
+     discards or invalidates.
+   - Both are `insert_before` (or both `insert_after`) anchored to the
+     same item — there's no defined order between two "goes here" claims
+     for the same position.
+
+   Two suggestions do **not** conflict when:
+   - Both are `append` on the same item — each is computed independently
+     against the original text and *composes by concatenation* (applied
+     in the plan's own generation order, never client selection order,
+     via `SuggestionApplier._in_plan_order` — see `compute_append_delta`).
+     This is what lets one line be broken into several independently
+     selectable "add this evidence" suggestions (e.g. "Add people
+     management evidence" / "Add AI-native tooling evidence" / "Add
+     incident-response evidence" as three separate `append`s to the same
+     Summary item) instead of one all-or-nothing rewrite.
+   - `insert_before`/`insert_after` and a mutation of its own anchor —
+     inserting a new bullet after item X while also appending to X's own
+     text are independent edits at different physical positions.
+   - `insert_before` and `insert_after` on the same anchor — different
+     sides.
+
+   Any conflict among the *selected* suggestions raises
+   `SuggestionConflictError` (→ HTTP `409`) naming the colliding
+   suggestion ids; nothing is silently chosen. "Span" has no literal
+   character-offset representation in this domain model — the policy
+   above is an operation-level approximation of it, not a sub-item diff.
 4. **Deterministic order:** suggestions are applied by walking the resume
    in its own original section/item order — never selection order,
    submission order, or confidence order — so the result never depends on
-   incidental request ordering.
+   incidental request ordering. Where more than one suggestion lands on
+   the same item (composed appends), they're concatenated in the plan's
+   own generation order specifically, for the same reason.
 5. Every item not targeted by a selected suggestion is carried through
    byte-for-byte unchanged.
 6. A final structural pass (`_run_final_validation`) checks two
@@ -377,16 +418,26 @@ stage with zero network calls:
    `careerConversationStatus === 'complete'`). Explains nothing changes
    yet. No auto-generation on mount or on refresh — `generate` only ever
    runs from the button's own click handler.
-2. **Review Suggestions** — one `TailoringSuggestionCard` per suggestion:
-   operation label (Append/Insert/Update/Replace/Remove/Add emphasis),
-   target section, Current-vs-Suggested (for `REPLACEMENT_OPERATIONS`) or
-   "New addition" (for insertions), reason, evidence source chips,
-   validation-status badge, an independent checkbox. Select all/Clear
-   all/selected count. An **Edit** action is offered per suggestion
-   (backed by the apply endpoint's real revalidation support — not a
-   fake/local-only edit): edited text is tracked separately from the
-   original, marked with an "Edited" badge, and **Reset** restores the
-   model-generated text.
+2. **Review Suggestions** — suggestions are visually clustered under one
+   heading per section (`groupSuggestionsBySection`,
+   `suggestionPresentation.ts`) while each renders as its own
+   `TailoringSuggestionCard` with its own independent checkbox — grouping
+   is a display concern only, never a change to what's individually
+   selectable. Each card shows: operation label (Add/Update/Strengthen/
+   Remove), Current-vs-Suggested (for `REPLACEMENT_OPERATIONS`) or "New
+   addition" (for insertions), reason, evidence source chips,
+   validation-status badge. Select all/Clear all/selected count. A card
+   whose suggestion has a non-empty `conflicts_with` shows a "Choose only
+   one: this conflicts with …" note naming the other suggestion(s) by
+   their own one-line summary (`buildConflictSummaries`); selecting it
+   auto-deselects whichever conflicting suggestion was previously
+   selected, so the candidate can never reach a combination the backend
+   would reject with a `409` — see "Conflict policy" above for exactly
+   which pairs conflict (independent `append`s to the same item never
+   do). An **Edit** action is offered per suggestion (backed by the apply
+   endpoint's real revalidation support — not a fake/local-only edit):
+   edited text is tracked separately from the original, marked with an
+   "Edited" badge, and **Reset** restores the model-generated text.
 3. **Custom Instructions** — a free-text field ("Anything else you want
    to change?"), persisted, applied to the *next* generate/regenerate
    call.
@@ -486,12 +537,24 @@ never be pre-selected as if it were "the original format."
   but isn't wired into the upload/generate/export flow — DOCX export
   still always regenerates from scratch today. PDF has no equivalent
   engine at all yet.
-- **Coarse conflict policy.** Two suggestions are treated as conflicting
-  whenever they'd mutate the same item or insert at the same anchor
-  position, even in cases a more advanced merge algorithm could
-  theoretically reconcile (e.g. two independent `append`s to the same
-  line). This is a deliberate safety-over-flexibility tradeoff — see
-  `SuggestionApplier`'s module docstring — not an oversight.
+- **Conflict policy approximates "span" at the operation level, not
+  character offsets.** `compute_conflicts` (see "Conflict policy" above)
+  lets independent `append`s to the same item compose, but still treats
+  *any* two `REWRITE_OPERATIONS` on the same item as conflicting even in
+  a case where, in principle, they touch genuinely disjoint parts of a
+  longer item's text (e.g. two `update`s that each only reword one
+  clause of a multi-clause bullet) — this domain model has no sub-item
+  character-offset concept to tell that apart from two truly competing
+  rewordings of the whole item, so it's conservatively treated as a
+  conflict either way. A deliberate safety-over-flexibility tradeoff, not
+  an oversight.
+- **Atomic decomposition is prompted, not guaranteed.** The Planner's
+  system prompt (`SuggestionPlannerPromptBuilder`) strongly instructs
+  splitting independent evidence into separate suggestions rather than
+  one broad rewrite, with a worked example — but nothing server-side
+  forces the model to actually do so for a given resume/job description;
+  an unusually terse or evidence-sparse Planner response could still
+  legitimately produce fewer, coarser suggestions.
 - **Markdown headings from a Markdown upload aren't semantically parsed.**
   The parser's heading heuristic (ALL CAPS or a common-heading keyword
   match) doesn't understand `#`/`##` Markdown syntax, so a Markdown

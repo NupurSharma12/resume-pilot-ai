@@ -16,7 +16,12 @@ descriptor: this is designed to consume
 `app.tailoring.applier.SuggestionApplier`'s own resolved output directly
 (selection/conflict/revalidation already settled there) rather than
 re-implementing any of that here. See `ConflictingEditsError`'s docstring
-for the one check this module still makes defensively.
+for the one check this module still makes defensively. Multiple
+independent `append` suggestions targeting the *same* paragraph are not
+only allowed but handled naturally here: each `append_text` call only
+ever adds a new run, never touches an earlier one, so composing several
+of them is just calling it several times -- no special-casing needed,
+unlike `SuggestionApplier`'s text-concatenation equivalent.
 """
 
 from io import BytesIO
@@ -26,43 +31,9 @@ from docx import Document
 from app.document_editing.docx_nodes import DocxParagraphNode
 from app.document_editing.docx_structure_mapper import DocxStructureMapper
 from app.document_editing.errors import ConflictingEditsError, EditTargetNotFoundError
-from app.models.tailoring_suggestions import (
-    REPLACEMENT_OPERATIONS,
-    SuggestionOperation,
-    TailoringSuggestion,
-)
-
-
-def compute_append_delta(current_text: str, suggested_text: str) -> str:
-    """Recover just the newly-appended portion of an `append` suggestion's full text.
-
-    `suggested_text` for `append` is always the item's full resulting
-    text (existing text + addition), per this pipeline's own contract
-    (enforced server-side at generation time -- see
-    `app.evidence.suggestion_validator`). `DocxParagraphNode.append_text`
-    needs only the addition, not the whole paragraph again, so this
-    strips `current_text` back out.
-
-    Deliberately preserves whatever separator punctuation/whitespace the
-    model put between the original and added text (e.g. the ", " in
-    "Python" -> "Python, TypeScript") rather than trimming it -- this
-    result is concatenated directly onto the existing DOCX text, unlike
-    the frontend's display-only equivalent
-    (`suggestionPresentation.ts`'s `computeAppendedDelta`), which trims
-    leading punctuation because it's presenting the delta on its own,
-    never concatenating it. Falls back to the full suggested text if
-    `current_text` genuinely isn't a substring -- unreachable given that
-    same server-side validation, but handled rather than assumed.
-    """
-    index = suggested_text.find(current_text)
-    if index == -1:
-        return suggested_text
-    # Content strictly after `current_text` is the genuinely new part;
-    # any content *before* it (unusual for an append, but not impossible)
-    # is folded in too, rather than silently dropped.
-    before = suggested_text[:index]
-    after = suggested_text[index + len(current_text) :]
-    return before + after
+from app.models.tailoring_suggestions import SuggestionOperation, TailoringSuggestion
+from app.tailoring.applier import compute_append_delta
+from app.tailoring.conflicts import compute_conflicts
 
 
 class DocxDocumentEditor:
@@ -95,29 +66,16 @@ class DocxDocumentEditor:
 
     @staticmethod
     def _check_no_conflicts(suggestions: list[TailoringSuggestion]) -> None:
-        """Mirrors `SuggestionApplier._check_conflicts`'s exact category policy.
-
-        Two suggestions only conflict if they'd both determine the same
-        physical outcome: both mutate the same target item's own content
-        (any two of `REPLACEMENT_OPERATIONS`), or both insert at the same
-        position relative to the same anchor (two `insert_before`, or two
-        `insert_after`, targeting the same item). An `insert_before`/
-        `insert_after` never conflicts with a mutation of its own anchor
-        -- they touch different physical positions. Using a coarser
-        "same target_item_id" rule here would reject batches
-        `SuggestionApplier` itself already approved as conflict-free.
+        """Reuses `app.tailoring.conflicts.compute_conflicts` -- the exact same policy
+        `SuggestionApplier` enforces, so this module can never disagree with it about
+        what counts as a conflict (e.g. multiple independent `append`s to the same
+        item are allowed here for precisely the same reason they're allowed there).
         """
-        seen: set[tuple[str, str]] = set()
-        for suggestion in suggestions:
-            category = (
-                "mutate"
-                if suggestion.operation in REPLACEMENT_OPERATIONS
-                else suggestion.operation.value
-            )
-            key = (suggestion.target_item_id, category)
-            if key in seen:
-                raise ConflictingEditsError(suggestion.target_item_id)
-            seen.add(key)
+        conflicts = compute_conflicts(suggestions)
+        by_id = {s.suggestion_id: s for s in suggestions}
+        for suggestion_id, other_ids in conflicts.items():
+            if other_ids:
+                raise ConflictingEditsError(by_id[suggestion_id].target_item_id)
 
     @staticmethod
     def _apply_one(node: DocxParagraphNode, suggestion: TailoringSuggestion) -> None:

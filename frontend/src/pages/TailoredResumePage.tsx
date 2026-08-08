@@ -11,10 +11,12 @@ import TailoringFinalResumeCard from '../components/TailoringFinalResumeCard'
 import TailoringDownloadPanel from '../components/TailoringDownloadPanel'
 import { getCareerConversation } from '../lib/careerConversationApi'
 import {
+  buildConflictSummaries,
   buildSectionFallbackOrdinals,
   buildSectionNameMap,
-  getReadableSectionName,
+  groupSuggestionsBySection,
 } from '../lib/suggestionPresentation'
+import { remapSelectionsToNewPlan } from '../lib/suggestionRecovery'
 import {
   applyTailoringSuggestions,
   downloadExportedFile,
@@ -25,7 +27,15 @@ import { ApiError } from '../lib/api'
 import { candidateFilenameBase, detectSourceFormatFromFilename } from '../lib/sourceFormat'
 import { useResumeSession } from '../session/ResumeSessionContext'
 import type { DashboardOutletContext } from '../layouts/DashboardLayout'
-import type { ExportFormat } from '../data/tailoringSuggestionsTypes'
+import type {
+  ExportFormat,
+  GenerateSuggestionsResponse,
+} from '../data/tailoringSuggestionsTypes'
+
+const RECOVERY_MESSAGE =
+  'We need to regenerate your tailoring suggestions before applying changes.\n\n' +
+  'Your resume and conversation are safe.\n\n' +
+  'Click Regenerate Suggestions to continue.'
 
 // Parses the suggestion id a 422 revalidation failure names out of the
 // backend's error message (see `SuggestionRevalidationFailedError` in
@@ -73,6 +83,14 @@ export default function TailoredResumePage() {
   const [revalidationErrors, setRevalidationErrors] = useState<Record<string, string>>({})
   const [exportingFormat, setExportingFormat] = useState<ExportFormat | null>(null)
   const [exportError, setExportError] = useState('')
+  // Stale-plan recovery (see `recoverFromStalePlan`) is deliberately
+  // page-local, transient UI state -- never persisted through
+  // ResumeSessionProvider. It only ever describes "what this page is
+  // doing right now in response to a 404," which has no meaning across a
+  // reload; the frontend orchestration layer owns this end to end, per
+  // this feature's explicit "keep the backend stateless" requirement.
+  const [isRecovering, setIsRecovering] = useState(false)
+  const [recoveryError, setRecoveryError] = useState('')
 
   // A tailored resume can only be grounded in a completed analysis AND a
   // *completed* Career Conversation (evidence recovery finishes there) --
@@ -151,12 +169,21 @@ export default function TailoredResumePage() {
     setTailoringSourceFormat,
   ])
 
+  // Selecting a suggestion that's mutually exclusive with one already
+  // selected (see `TailoringSuggestion.conflicts_with`) auto-deselects the
+  // other one, rather than letting the candidate reach an invalid
+  // combination that would only 409 once they click Apply -- the card's
+  // "Choose only one" note (see `buildConflictSummaries`) explains why a
+  // checkbox they didn't touch just unchecked itself.
   function toggleSuggestion(suggestionId: string, selected: boolean) {
-    setTailoringSelections(
-      selected
-        ? [...tailoringSelections, suggestionId]
-        : tailoringSelections.filter((id) => id !== suggestionId),
-    )
+    if (!selected) {
+      setTailoringSelections(tailoringSelections.filter((id) => id !== suggestionId))
+      return
+    }
+    const suggestion = tailoringPlan?.suggestions.find((s) => s.suggestion_id === suggestionId)
+    const conflictIds = new Set(suggestion?.conflicts_with ?? [])
+    const withoutConflicts = tailoringSelections.filter((id) => !conflictIds.has(id))
+    setTailoringSelections([...withoutConflicts, suggestionId])
   }
 
   function selectAll() {
@@ -185,19 +212,12 @@ export default function TailoredResumePage() {
     }
   }
 
-  const handleApply = useCallback(async () => {
-    if (!tailoringPlan) return
-    if (isApplyingRef.current) return
-    isApplyingRef.current = true
-    setIsApplying(true)
-    setApplyError('')
-    setRevalidationErrors({})
-    try {
-      const result = await applyTailoringSuggestions(
-        tailoringPlan.plan_id,
-        tailoringSelections,
-        tailoringEditedTexts,
-      )
+  // Runs the actual apply call and applies its result to shared state.
+  // Throws on failure -- callers decide what a failure means (a hard
+  // error vs. a recoverable stale-plan 404).
+  const attemptApply = useCallback(
+    async (planId: string, selections: string[], editedTexts: Record<string, string>) => {
+      const result = await applyTailoringSuggestions(planId, selections, editedTexts)
       // Only ever overwritten by a *new* success -- a later failed apply
       // must never clear this, so the last good result stays visible and
       // downloadable (see this feature's docs on why).
@@ -206,24 +226,116 @@ export default function TailoredResumePage() {
         appliedSuggestionIds: result.applied_suggestion_ids,
       })
       setTailoringValidationReport(result.final_validation)
+    },
+    [setFinalTailoredResume, setTailoringValidationReport],
+  )
+
+  // Shared by both the direct-failure path (handleApply's own catch) and
+  // the post-recovery retry's own catch -- a non-404 failure is handled
+  // identically either way, so this is written once.
+  function classifyAndSetApplyError(err: unknown) {
+    if (err instanceof ApiError && err.cause === 'revalidation_failed') {
+      const suggestionId = parseRevalidationSuggestionId(err.message)
+      if (suggestionId) {
+        setRevalidationErrors({ [suggestionId]: err.message })
+        return
+      }
+    }
+    setApplyError(
+      err instanceof ApiError ? err.message : 'An unexpected error occurred. Please try again.',
+    )
+  }
+
+  // Apply's stale-plan recovery: the backend's `TailoringPlanStore` is
+  // deliberately in-memory only (see `docs/features/
+  // interactive-tailored-resume.md`'s "Trust boundary") -- a restart
+  // between generating a plan and applying it is expected, recoverable
+  // behavior, not a bug, and the backend stays exactly as stateless as
+  // before. Everything here is frontend orchestration: regenerate a
+  // fresh plan from the same resume/job description/conversation/custom
+  // instructions already held in session, remap the previous selections
+  // onto it (`remapSelectionsToNewPlan`), and retry the apply the user
+  // actually asked for -- automatically, without a second click.
+  async function recoverFromStalePlan() {
+    if (!resume || !jobDescription || !resumeAnalysis || !activeCareerConversationSessionId) {
+      // No context left to regenerate from (e.g. the session itself was
+      // cleared) -- nothing left to try automatically.
+      setRecoveryError(RECOVERY_MESSAGE)
+      return
+    }
+
+    setApplyError('')
+    setRevalidationErrors({})
+    setRecoveryError('')
+    setIsRecovering(true)
+
+    let newPlan: GenerateSuggestionsResponse
+    try {
+      const session = await getCareerConversation(activeCareerConversationSessionId)
+      newPlan = await generateTailoringSuggestions(
+        resume.text,
+        jobDescription.text,
+        resumeAnalysis,
+        session,
+        tailoringCustomInstructions,
+        resume.fileName,
+      )
+    } catch {
+      // Regeneration itself failed -- this is the one case the user
+      // should see something, per this feature's explicit requirement
+      // that only a failed *regeneration* (not the original 404) becomes
+      // user-facing.
+      setIsRecovering(false)
+      setRecoveryError(RECOVERY_MESSAGE)
+      return
+    }
+
+    const remapped = remapSelectionsToNewPlan(
+      tailoringPlan?.suggestions ?? [],
+      tailoringSelections,
+      tailoringEditedTexts,
+      newPlan.suggestions,
+    )
+    setTailoringPlan(newPlan)
+    setTailoringPlanStatus('idle')
+    setTailoringSelections(remapped.selections)
+    setTailoringEditedTexts(remapped.editedTexts)
+    setTailoringAvailableExportFormats(newPlan.available_export_formats)
+    setTailoringSourceFormat(detectSourceFormatFromFilename(resume.fileName))
+    setIsRecovering(false)
+
+    try {
+      await attemptApply(newPlan.plan_id, remapped.selections, remapped.editedTexts)
     } catch (err) {
-      if (err instanceof ApiError && err.cause === 'revalidation_failed') {
-        const suggestionId = parseRevalidationSuggestionId(err.message)
-        if (suggestionId) {
-          setRevalidationErrors({ [suggestionId]: err.message })
-        } else {
-          setApplyError(err.message)
-        }
+      // A second failure at this point (even another 404) is treated as
+      // a real error -- no further automatic recovery, so this can never
+      // loop.
+      classifyAndSetApplyError(err)
+    }
+  }
+
+  const handleApply = useCallback(async () => {
+    if (!tailoringPlan) return
+    if (isApplyingRef.current) return
+    isApplyingRef.current = true
+    setIsApplying(true)
+    setApplyError('')
+    setRevalidationErrors({})
+    setRecoveryError('')
+    try {
+      await attemptApply(tailoringPlan.plan_id, tailoringSelections, tailoringEditedTexts)
+    } catch (err) {
+      if (err instanceof ApiError && err.cause === 'not_found') {
+        await recoverFromStalePlan()
       } else {
-        setApplyError(
-          err instanceof ApiError ? err.message : 'An unexpected error occurred. Please try again.',
-        )
+        classifyAndSetApplyError(err)
       }
     } finally {
       setIsApplying(false)
       isApplyingRef.current = false
     }
-  }, [tailoringPlan, tailoringSelections, tailoringEditedTexts, setFinalTailoredResume, setTailoringValidationReport])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tailoringPlan, tailoringSelections, tailoringEditedTexts, attemptApply])
 
   const handleDownload = useCallback(
     async (format: ExportFormat) => {
@@ -271,6 +383,19 @@ export default function TailoredResumePage() {
     () => buildSectionFallbackOrdinals(tailoringPlan?.suggestions ?? []),
     [tailoringPlan],
   )
+  const suggestionGroups = useMemo(
+    () =>
+      groupSuggestionsBySection(
+        tailoringPlan?.suggestions ?? [],
+        sectionNames,
+        sectionFallbackOrdinals,
+      ),
+    [tailoringPlan, sectionNames, sectionFallbackOrdinals],
+  )
+  const conflictSummaries = useMemo(
+    () => buildConflictSummaries(tailoringPlan?.suggestions ?? []),
+    [tailoringPlan],
+  )
 
   function applyRecommendedSelection() {
     if (!tailoringPlan) return
@@ -279,7 +404,7 @@ export default function TailoredResumePage() {
     )
   }
 
-  const suggestionsListRef = useRef<HTMLUListElement>(null)
+  const suggestionsListRef = useRef<HTMLDivElement>(null)
   function scrollToSuggestions() {
     suggestionsListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
@@ -369,26 +494,36 @@ export default function TailoredResumePage() {
                     No suggestions were proposed for this resume and job description.
                   </p>
                 ) : (
-                  <ul ref={suggestionsListRef} className="space-y-3">
-                    {tailoringPlan.suggestions.map((suggestion) => (
-                      <TailoringSuggestionCard
-                        key={suggestion.suggestion_id}
-                        suggestion={suggestion}
-                        sectionName={getReadableSectionName(
-                          suggestion,
-                          sectionNames,
-                          sectionFallbackOrdinals,
-                        )}
-                        accepted={tailoringSelections.includes(suggestion.suggestion_id)}
-                        onToggleAccepted={(accepted) =>
-                          toggleSuggestion(suggestion.suggestion_id, accepted)
-                        }
-                        editedText={tailoringEditedTexts[suggestion.suggestion_id] ?? null}
-                        onEditedTextChange={(text) => setEditedText(suggestion.suggestion_id, text)}
-                        revalidationError={revalidationErrors[suggestion.suggestion_id] ?? null}
-                      />
+                  <div ref={suggestionsListRef} className="space-y-6">
+                    {suggestionGroups.map((group) => (
+                      <div key={group.sectionId}>
+                        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
+                          {group.sectionName}
+                        </h3>
+                        <ul className="space-y-3">
+                          {group.suggestions.map((suggestion) => (
+                            <TailoringSuggestionCard
+                              key={suggestion.suggestion_id}
+                              suggestion={suggestion}
+                              sectionName={group.sectionName}
+                              accepted={tailoringSelections.includes(suggestion.suggestion_id)}
+                              onToggleAccepted={(accepted) =>
+                                toggleSuggestion(suggestion.suggestion_id, accepted)
+                              }
+                              editedText={tailoringEditedTexts[suggestion.suggestion_id] ?? null}
+                              onEditedTextChange={(text) =>
+                                setEditedText(suggestion.suggestion_id, text)
+                              }
+                              revalidationError={revalidationErrors[suggestion.suggestion_id] ?? null}
+                              conflictSummaries={
+                                conflictSummaries.get(suggestion.suggestion_id) ?? []
+                              }
+                            />
+                          ))}
+                        </ul>
+                      </div>
                     ))}
-                  </ul>
+                  </div>
                 )}
 
                 {/* Stage 3: Custom Instructions */}
@@ -429,10 +564,32 @@ export default function TailoredResumePage() {
                       disabled={selectedCount === 0 || isApplying}
                       onClick={handleApply}
                     >
-                      {isApplying ? 'Applying…' : 'Apply Selected Changes'}
+                      {isRecovering
+                        ? 'Applying…'
+                        : isApplying
+                          ? 'Applying…'
+                          : 'Apply Selected Changes'}
                     </Button>
                   </div>
-                  {applyError && (
+                  {isRecovering && (
+                    <p aria-live="polite" className="mt-4 text-sm text-gray-500">
+                      Refreshing tailoring suggestions…
+                    </p>
+                  )}
+                  {!isRecovering && recoveryError && (
+                    <div className="mt-4 rounded-xl border border-amber-100 bg-amber-50/60 p-4">
+                      <p className="whitespace-pre-line text-sm text-amber-700">{recoveryError}</p>
+                      <Button
+                        variant="outline"
+                        icon={<RotateCw size={14} />}
+                        className="mt-3"
+                        onClick={recoverFromStalePlan}
+                      >
+                        Regenerate Suggestions
+                      </Button>
+                    </div>
+                  )}
+                  {!isRecovering && !recoveryError && applyError && (
                     <div className="mt-4 rounded-xl border border-rose-100 bg-rose-50/60 p-4">
                       <p className="text-sm text-rose-600">{applyError}</p>
                     </div>

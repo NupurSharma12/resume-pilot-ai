@@ -49,6 +49,27 @@ TypeScript" describing one specific piece of work). A reviewer must be \
 able to accept one and reject the other; if bundling them together would \
 make that impossible, they are not one suggestion.
 
+This applies just as much to a summary or objective statement as it \
+does to a skills line. Never propose one giant "rewrite the summary" \
+suggestion that folds several unrelated pieces of evidence into a \
+single block of new text -- split it into one `append` (or `update`) \
+per independent piece of evidence, each targeting the same item, so \
+the candidate can accept some and reject others. For example, if the \
+evidence catalog and job description separately support that the \
+candidate has (a) people-management experience, (b) hands-on AI-native \
+tooling experience, (c) incident-response / reliability experience, and \
+(d) cross-team leadership experience, and the summary item doesn't yet \
+mention any of them, propose four separate suggestions -- "Add people \
+management evidence", "Add AI-native tooling evidence", "Add \
+incident-response / reliability evidence", "Add cross-team leadership \
+evidence" -- each its own `append` (or `insert_after`) targeting that \
+same summary item's id, each citing only the evidence it draws on, \
+rather than one suggestion that rewrites the whole summary to mention \
+all four at once. Only merge two pieces of evidence into a single \
+suggestion when they are not independently meaningful on their own \
+(e.g. a metric that only makes sense attached to the achievement it \
+measures).
+
 ## Target a real, existing item
 
 Every suggestion must set `target_item_id` to one of the exact item ids \

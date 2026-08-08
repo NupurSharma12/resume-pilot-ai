@@ -77,6 +77,7 @@ export const fixtureSuggestionAppend: TailoringSuggestion = {
   selected_by_default: true,
   validation_status: 'supported_by_conversation',
   validation_issues: [],
+  conflicts_with: [],
 }
 
 export const fixtureSuggestionInsert: TailoringSuggestion = {
@@ -93,6 +94,7 @@ export const fixtureSuggestionInsert: TailoringSuggestion = {
   selected_by_default: true,
   validation_status: 'supported_by_conversation',
   validation_issues: [],
+  conflicts_with: [],
 }
 
 export const fixtureGenerateSuggestionsResponse: GenerateSuggestionsResponse = {
