@@ -341,3 +341,113 @@ async def test_rewrite_citing_evidence_outside_its_edits_approval_is_dropped_not
     assert suggestion.evidence_ids == []
     assert suggestion.validation_status == SuggestionValidationStatus.UNSUPPORTED
     assert suggestion.selected_by_default is False
+
+
+async def test_multiple_independent_appends_to_the_same_item_are_annotated_conflict_free(
+    resume_analysis: ResumeAnalysisResult, conversation_history: list[ConversationExchange]
+) -> None:
+    """The motivating scenario: several atomic "add this evidence" suggestions for one item."""
+    item_id = _skills_item_id()
+    evidence_id = f"resume-{item_id}"
+    edits = PlannedEdits(
+        edits=[
+            SuggestedEdit(
+                target_section_id="section-1",
+                target_item_id=item_id,
+                operation=SuggestionOperation.APPEND,
+                reason="Add TypeScript.",
+                evidence_ids=[evidence_id, "conversation-turn-1"],
+            ),
+            SuggestedEdit(
+                target_section_id="section-1",
+                target_item_id=item_id,
+                operation=SuggestionOperation.APPEND,
+                reason="Add React.",
+                evidence_ids=[evidence_id, "conversation-turn-1"],
+            ),
+        ]
+    )
+    gateway = FakeGateway(
+        [
+            edits,
+            SuggestionText(
+                suggested_text="Python, TypeScript",
+                evidence_ids=[evidence_id, "conversation-turn-1"],
+                confidence=90,
+            ),
+            SuggestionText(
+                suggested_text="Python, React",
+                evidence_ids=[evidence_id, "conversation-turn-1"],
+                confidence=90,
+            ),
+        ]
+    )
+    workflow = _workflow(gateway)
+
+    result = await workflow.generate_suggestions(
+        resume=_RESUME_TEXT,
+        job_description="Looking for a full-stack engineer.",
+        resume_analysis=resume_analysis,
+        conversation_history=conversation_history,
+        custom_instructions=None,
+    )
+
+    suggestions = result.plan.suggestions
+    assert len(suggestions) == 2
+    assert suggestions[0].conflicts_with == []
+    assert suggestions[1].conflicts_with == []
+    # Neither suggestion needed to be downgraded -- independent appends
+    # can both stay pre-selected.
+    assert suggestions[0].selected_by_default is True
+    assert suggestions[1].selected_by_default is True
+
+
+async def test_two_rewrites_of_the_same_item_are_annotated_as_mutually_exclusive(
+    resume_analysis: ResumeAnalysisResult, conversation_history: list[ConversationExchange]
+) -> None:
+    item_id = _skills_item_id()
+    evidence_id = f"resume-{item_id}"
+    edits = PlannedEdits(
+        edits=[
+            SuggestedEdit(
+                target_section_id="section-1",
+                target_item_id=item_id,
+                operation=SuggestionOperation.UPDATE,
+                reason="Reword for emphasis, option A.",
+                evidence_ids=[evidence_id],
+            ),
+            SuggestedEdit(
+                target_section_id="section-1",
+                target_item_id=item_id,
+                operation=SuggestionOperation.UPDATE,
+                reason="Reword for emphasis, option B.",
+                evidence_ids=[evidence_id],
+            ),
+        ]
+    )
+    gateway = FakeGateway(
+        [
+            edits,
+            SuggestionText(
+                suggested_text="Python (expert)", evidence_ids=[evidence_id], confidence=90
+            ),
+            SuggestionText(suggested_text="Pythonista", evidence_ids=[evidence_id], confidence=90),
+        ]
+    )
+    workflow = _workflow(gateway)
+
+    result = await workflow.generate_suggestions(
+        resume=_RESUME_TEXT,
+        job_description="Looking for a full-stack engineer.",
+        resume_analysis=resume_analysis,
+        conversation_history=conversation_history,
+        custom_instructions=None,
+    )
+
+    first, second = result.plan.suggestions
+    assert first.conflicts_with == [second.suggestion_id]
+    assert second.conflicts_with == [first.suggestion_id]
+    # Only the first-seen suggestion in a conflicting group stays
+    # pre-selected, so the default selection is never self-contradictory.
+    assert first.selected_by_default is True
+    assert second.selected_by_default is False

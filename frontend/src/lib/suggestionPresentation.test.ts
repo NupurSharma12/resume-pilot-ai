@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  buildConflictSummaries,
   buildSectionFallbackOrdinals,
   buildSectionNameMap,
   computeAppendedDelta,
@@ -7,6 +8,7 @@ import {
   getImpactLevel,
   getReadableSectionName,
   groupEvidenceSources,
+  groupSuggestionsBySection,
   OPERATION_ACTION_LABELS,
   summarizeSuggestionChange,
   truncateText,
@@ -28,6 +30,7 @@ function suggestion(overrides: Partial<TailoringSuggestion> = {}): TailoringSugg
     selected_by_default: true,
     validation_status: 'supported_by_original_resume',
     validation_issues: [],
+    conflicts_with: [],
     ...overrides,
   }
 }
@@ -267,5 +270,80 @@ describe('summarizeSuggestionChange', () => {
       suggested_text: 'x'.repeat(200),
     })
     expect(summarizeSuggestionChange(s).length).toBeLessThan(90)
+  })
+})
+
+describe('groupSuggestionsBySection', () => {
+  it('buckets suggestions by target_section_id, preserving first-seen section order', () => {
+    const suggestions = [
+      suggestion({ suggestion_id: 's1', target_section_id: 'section-1' }),
+      suggestion({ suggestion_id: 's2', target_section_id: 'section-2' }),
+      suggestion({ suggestion_id: 's3', target_section_id: 'section-1' }),
+    ]
+    const sectionNames = buildSectionNameMap(suggestions)
+    const ordinals = buildSectionFallbackOrdinals(suggestions)
+
+    const groups = groupSuggestionsBySection(suggestions, sectionNames, ordinals)
+
+    expect(groups.map((g) => g.sectionId)).toEqual(['section-1', 'section-2'])
+    expect(groups[0].suggestions.map((s) => s.suggestion_id)).toEqual(['s1', 's3'])
+    expect(groups[1].suggestions.map((s) => s.suggestion_id)).toEqual(['s2'])
+  })
+
+  it('gives each group the same readable section name every suggestion in it would get', () => {
+    const suggestions = [
+      suggestion({
+        suggestion_id: 's1',
+        target_section_id: 'section-1',
+        evidence_sources: ['Resume: SKILLS'],
+      }),
+      suggestion({
+        suggestion_id: 's2',
+        target_section_id: 'section-1',
+        evidence_sources: ['Conversation Turn 1'],
+      }),
+    ]
+    const sectionNames = buildSectionNameMap(suggestions)
+    const ordinals = buildSectionFallbackOrdinals(suggestions)
+
+    const groups = groupSuggestionsBySection(suggestions, sectionNames, ordinals)
+
+    expect(groups[0].sectionName).toBe('Skills')
+  })
+
+  it('returns no groups for an empty suggestion list', () => {
+    expect(groupSuggestionsBySection([], new Map(), new Map())).toEqual([])
+  })
+})
+
+describe('buildConflictSummaries', () => {
+  it('is empty for a suggestion with no conflicts', () => {
+    const suggestions = [suggestion({ suggestion_id: 's1', conflicts_with: [] })]
+    const summaries = buildConflictSummaries(suggestions)
+    expect(summaries.has('s1')).toBe(false)
+  })
+
+  it('summarizes each conflicting suggestion by its own one-line change summary', () => {
+    const suggestions = [
+      suggestion({
+        suggestion_id: 's1',
+        operation: 'update',
+        current_text: 'Python',
+        suggested_text: 'Pythonista',
+        conflicts_with: ['s2'],
+      }),
+      suggestion({
+        suggestion_id: 's2',
+        operation: 'update',
+        current_text: 'Python',
+        suggested_text: 'Python expert',
+        conflicts_with: ['s1'],
+      }),
+    ]
+
+    const summaries = buildConflictSummaries(suggestions)
+
+    expect(summaries.get('s1')).toEqual([summarizeSuggestionChange(suggestions[1])])
+    expect(summaries.get('s2')).toEqual([summarizeSuggestionChange(suggestions[0])])
   })
 })

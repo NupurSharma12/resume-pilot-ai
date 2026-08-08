@@ -22,17 +22,19 @@ plan is rejected outright, not silently ignored.
 
 ## Conflict policy
 
-Two selected suggestions conflict if they would both try to determine the
-same physical outcome at the same anchor: either two suggestions both
-mutate the same target item's own content (any of `REPLACEMENT_OPERATIONS`
-— there is no principled way to apply two independent rewrites of one
-line), or two suggestions both insert a new item at the same position
-relative to the same anchor (two `insert_before` on the same item, or two
-`insert_after` on the same item — there is no defined order between them).
-An `insert_before`/`insert_after` does *not* conflict with a mutation of
-its own anchor item (e.g. inserting a new bullet after item X while also
-appending a phrase to item X's own text) — those are independent edits at
-different physical positions. Any conflict is rejected outright (see
+Two selected suggestions conflict if they would both determine the same
+"span" of one item's text — see `app.tailoring.conflicts.compute_conflicts`
+for the exact, shared rules (also used to proactively annotate each
+suggestion's `conflicts_with` at generation time, so the review UI can
+warn *before* the user selects two conflicting suggestions, not just when
+apply rejects them). In short: two rewrite-type operations
+(`update`/`replace`/`add_emphasis`/`remove`) on the same item are
+alternatives (at most one may be selected); a rewrite conflicts with an
+`append` on the same item too (its basis text becomes invalid); but
+multiple independent `append`s on the same item do **not** conflict —
+they compose by concatenation, which is exactly what lets one paragraph
+be broken into several independently-selectable suggestions instead of
+one all-or-nothing rewrite. Any conflict is rejected outright (see
 `SuggestionConflictError`); this module never guesses which one the user
 "really" meant.
 
@@ -41,7 +43,9 @@ different physical positions. Any conflict is rejected outright (see
 Suggestions are applied by walking the resume in its own original
 section/item order — never in selection order, submission order, or
 confidence order — so the result never depends on incidental ordering in
-the request.
+the request. Where more than one suggestion targets the *same* item
+(multiple composable `append`s), they're applied in the plan's own
+generation order, for the same reason.
 """
 
 from dataclasses import dataclass, field
@@ -51,12 +55,13 @@ from app.evidence.suggestion_validator import validate_suggestion
 from app.models.evidence_store import EvidenceStore
 from app.models.resume_structure import ResumeItem, ResumeSection, StructuredResume
 from app.models.tailoring_suggestions import (
-    REPLACEMENT_OPERATIONS,
+    REWRITE_OPERATIONS,
     SuggestionOperation,
     SuggestionPlan,
     SuggestionValidationStatus,
     TailoringSuggestion,
 )
+from app.tailoring.conflicts import compute_conflicts
 
 logger = get_logger(__name__)
 
@@ -124,6 +129,35 @@ class ApplyResult:
     final_validation: FinalValidationReport
 
 
+def compute_append_delta(current_text: str, suggested_text: str) -> str:
+    """Recover just the newly-appended portion of an `append` suggestion's full text.
+
+    `suggested_text` for `append` is always the item's full resulting
+    text (existing text + addition), per this pipeline's contract
+    (enforced server-side at generation time — see
+    `app.evidence.suggestion_validator`). Composing *multiple* independent
+    appends to the same item (see the conflict policy above) needs just
+    each one's own added portion, not the whole paragraph again each
+    time — this extracts it by removing `current_text` from
+    `suggested_text`, preserving whatever separator punctuation/whitespace
+    the model produced (e.g. the ", " in "Python" -> "Python, TypeScript")
+    since the result is concatenated directly onto real resume text.
+    Falls back to the full suggested text if `current_text` genuinely
+    isn't a substring — unreachable given that same server-side
+    validation, but handled rather than assumed.
+
+    Shared verbatim with `app.document_editing.docx_document_editor`,
+    which needs the identical extraction for the same reason against a
+    live DOCX paragraph instead of a `ResumeItem`.
+    """
+    index = suggested_text.find(current_text)
+    if index == -1:
+        return suggested_text
+    before = suggested_text[:index]
+    after = suggested_text[index + len(current_text) :]
+    return before + after
+
+
 class SuggestionApplier:
     """Applies a caller-selected subset of a `StoredPlan`'s suggestions to its resume."""
 
@@ -158,7 +192,12 @@ class SuggestionApplier:
         )
         self._check_conflicts(selected)
 
-        final_resume = self._build_final_resume(stored_structured_resume, selected)
+        # Composing multiple suggestions on the *same* item (independent
+        # appends -- see the conflict policy above) needs a stable order
+        # that doesn't depend on the client's submission order; the
+        # plan's own generation order is that stable order.
+        selected_in_plan_order = self._in_plan_order(plan, selected)
+        final_resume = self._build_final_resume(stored_structured_resume, selected_in_plan_order)
         final_validation = self._run_final_validation(
             stored_structured_resume, final_resume, selected
         )
@@ -234,25 +273,26 @@ class SuggestionApplier:
 
     @staticmethod
     def _check_conflicts(selected: list[TailoringSuggestion]) -> None:
-        groups: dict[tuple[str, str], list[TailoringSuggestion]] = {}
-        for suggestion in selected:
-            category = (
-                "mutate"
-                if suggestion.operation in REPLACEMENT_OPERATIONS
-                else suggestion.operation.value
-            )
-            groups.setdefault((suggestion.target_item_id, category), []).append(suggestion)
+        by_id = {s.suggestion_id: s for s in selected}
+        conflicts = compute_conflicts(selected)
+        for suggestion_id, other_ids in conflicts.items():
+            if other_ids:
+                group = sorted([suggestion_id, *other_ids])
+                raise SuggestionConflictError(by_id[suggestion_id].target_item_id, group)
 
-        for (target_item_id, _category), group in groups.items():
-            if len(group) > 1:
-                raise SuggestionConflictError(target_item_id, [s.suggestion_id for s in group])
+    @staticmethod
+    def _in_plan_order(
+        plan: SuggestionPlan, selected: list[TailoringSuggestion]
+    ) -> list[TailoringSuggestion]:
+        by_id = {s.suggestion_id: s for s in selected}
+        return [by_id[s.suggestion_id] for s in plan.suggestions if s.suggestion_id in by_id]
 
     @staticmethod
     def _build_final_resume(
-        structured_resume: StructuredResume, selected: list[TailoringSuggestion]
+        structured_resume: StructuredResume, selected_in_plan_order: list[TailoringSuggestion]
     ) -> StructuredResume:
         by_target_item: dict[str, list[TailoringSuggestion]] = {}
-        for suggestion in selected:
+        for suggestion in selected_in_plan_order:
             by_target_item.setdefault(suggestion.target_item_id, []).append(suggestion)
 
         sections = [
@@ -278,12 +318,29 @@ class SuggestionApplier:
                         )
                     )
 
-            mutation = next((s for s in targeting if s.operation in REPLACEMENT_OPERATIONS), None)
-            if mutation is None:
+            # At most one of these two branches has anything in it: a
+            # rewrite always conflicts with an append on the same item
+            # (see `compute_conflicts`), so `_check_conflicts` above has
+            # already rejected any selection that would need both.
+            rewrite = next((s for s in targeting if s.operation in REWRITE_OPERATIONS), None)
+            appends = [s for s in targeting if s.operation == SuggestionOperation.APPEND]
+
+            if rewrite is not None:
+                if rewrite.operation != SuggestionOperation.REMOVE:
+                    new_items.append(ResumeItem(item_id=item.item_id, text=rewrite.suggested_text))
+                # REMOVE: the item is dropped -- nothing appended.
+            elif appends:
+                # Multiple independent appends compose: each is computed
+                # against the item's *original* text and concatenated in
+                # plan order, so they never overwrite one another.
+                text = item.text
+                for append in appends:
+                    text += compute_append_delta(
+                        append.current_text or item.text, append.suggested_text
+                    )
+                new_items.append(ResumeItem(item_id=item.item_id, text=text))
+            else:
                 new_items.append(item)
-            elif mutation.operation != SuggestionOperation.REMOVE:
-                new_items.append(ResumeItem(item_id=item.item_id, text=mutation.suggested_text))
-            # REMOVE: the item is dropped -- nothing appended.
 
             for suggestion in targeting:
                 if suggestion.operation == SuggestionOperation.INSERT_AFTER:

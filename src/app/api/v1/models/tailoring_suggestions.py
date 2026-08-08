@@ -91,6 +91,13 @@ class SuggestionResponse(BaseModel):
     validation_issues: list[str] = Field(
         description="Human-readable reasons behind validation_status, if not cleanly supported."
     )
+    conflicts_with: list[str] = Field(
+        description=(
+            "suggestion_ids of other suggestions in this plan that are mutually exclusive with "
+            "this one (selecting more than one from the same group is rejected at apply time). "
+            "Empty if this suggestion has no conflicts."
+        )
+    )
 
 
 class GenerateSuggestionsResponse(BaseModel):

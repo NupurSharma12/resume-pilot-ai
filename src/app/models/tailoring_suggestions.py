@@ -86,6 +86,26 @@ REPLACEMENT_OPERATIONS = frozenset(
     }
 )
 
+# The strict subset of `REPLACEMENT_OPERATIONS` that determines an item's
+# *entire* text, not just adds to it -- used by `app.tailoring.conflicts`
+# to decide which operations are true alternatives (at most one may be
+# selected per item) versus composable additions. `APPEND` is
+# deliberately excluded: multiple independent appends to the same item
+# compose by concatenation (each is computed against the item's original
+# text and simply added), which is exactly what lets a single paragraph
+# (e.g. a Summary) be broken into several independently-selectable
+# "add this evidence" suggestions instead of one all-or-nothing rewrite.
+# See `docs/features/interactive-tailored-resume.md`'s conflict-policy
+# section for the full reasoning.
+REWRITE_OPERATIONS = frozenset(
+    {
+        SuggestionOperation.UPDATE,
+        SuggestionOperation.REPLACE,
+        SuggestionOperation.ADD_EMPHASIS,
+        SuggestionOperation.REMOVE,
+    }
+)
+
 
 class SuggestionValidationStatus(StrEnum):
     """How a suggestion's `suggested_text` relates to available evidence.
@@ -192,6 +212,16 @@ class TailoringSuggestion(BaseModel):
     validation_issues: list[str] = Field(
         default_factory=list,
         description="Human-readable reasons behind `validation_status`, if not cleanly supported.",
+    )
+    conflicts_with: list[str] = Field(
+        default_factory=list,
+        description=(
+            "suggestion_ids of other suggestions in this same plan that this one is mutually "
+            "exclusive with (see app.tailoring.conflicts.compute_conflicts) -- selecting more "
+            "than one suggestion from a conflicting group is rejected at apply time. Computed "
+            "once, over the whole plan, right after generation; empty for a suggestion with no "
+            "conflicts."
+        ),
     )
 
 

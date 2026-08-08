@@ -91,6 +91,14 @@ interface TailoringSuggestionCardProps {
   editedText: string | null
   onEditedTextChange: (text: string | null) => void
   revalidationError: string | null
+  // Human-readable one-line summaries of the other suggestions this one is
+  // mutually exclusive with (see `suggestion.conflicts_with` /
+  // `buildConflictSummaries`) -- empty for the common case of no conflict.
+  // Selecting this suggestion while one of those is already selected
+  // auto-deselects the other (see TailoredResumePage's `toggleSuggestion`);
+  // this note explains why, so it never looks like the UI silently
+  // unchecked something the candidate picked.
+  conflictSummaries: string[]
 }
 
 // Renders one suggestion for Stage 2 review as a compact resume-coach
@@ -113,6 +121,7 @@ export default function TailoringSuggestionCard({
   editedText,
   onEditedTextChange,
   revalidationError,
+  conflictSummaries,
 }: TailoringSuggestionCardProps) {
   const [isEditing, setIsEditing] = useState(false)
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
@@ -212,6 +221,18 @@ export default function TailoringSuggestionCard({
           </button>
         )}
       </div>
+
+      {conflictSummaries.length > 0 && (
+        <p className="mt-2 text-xs font-medium text-amber-600">
+          Choose only one: this conflicts with{' '}
+          {conflictSummaries.map((summary, index) => (
+            <span key={summary}>
+              {index > 0 && ', '}
+              &ldquo;{summary}&rdquo;
+            </span>
+          ))}
+        </p>
+      )}
 
       {revalidationError && (
         <p className="mt-2 text-xs font-medium text-rose-600">{revalidationError}</p>

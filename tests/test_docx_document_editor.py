@@ -201,6 +201,40 @@ class TestDocxDocumentEditorApply:
         assert "Python, TypeScript" in texts
         assert "Node.js" in texts
 
+    def test_multiple_independent_appends_to_the_same_paragraph_compose(self) -> None:
+        """The exact motivating scenario: several atomic evidence-additions to one line."""
+        original = build_sample_docx_bytes()
+        structured, _ = DocxStructureMapper().map(open_docx(original))
+        section_id, item_id = _item_id(structured, "Python")
+        suggestions = [
+            make_suggestion(
+                "s1",
+                section_id,
+                item_id,
+                SuggestionOperation.APPEND,
+                "Python",
+                "Python, TypeScript",
+            ),
+            make_suggestion(
+                "s2",
+                section_id,
+                item_id,
+                SuggestionOperation.APPEND,
+                "Python",
+                "Python, and Node.js",
+            ),
+        ]
+
+        edited_bytes = DocxDocumentEditor().apply(original, suggestions)
+        edited = open_docx(edited_bytes)
+
+        paragraph = next(p for p in edited.paragraphs if p.text.startswith("Python"))
+        assert paragraph.text == "Python, TypeScript, and Node.js"
+        # Both additions landed as their own runs -- the original "Python"
+        # run was never touched.
+        assert paragraph.runs[0].text == "Python"
+        assert paragraph.runs[0].bold is True
+
     def test_no_edits_leaves_all_text_unchanged(self) -> None:
         original = build_sample_docx_bytes()
 

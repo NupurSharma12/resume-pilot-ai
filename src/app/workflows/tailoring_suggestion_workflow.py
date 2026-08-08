@@ -51,6 +51,7 @@ from app.models.tailoring_suggestions import (
 from app.prompts.suggestion_planner_prompt_builder import SuggestionPlannerPromptBuilder
 from app.prompts.suggestion_rewrite_prompt_builder import SuggestionRewritePromptBuilder
 from app.resume_structure.parser import ResumeStructureParser
+from app.tailoring.conflicts import compute_conflicts
 
 logger = get_logger(__name__)
 
@@ -141,6 +142,7 @@ class TailoringSuggestionWorkflow:
         suggestions = await self._generate_suggestion_texts(
             edits, structured_resume, evidence_store, custom_instructions
         )
+        suggestions = self._annotate_conflicts(suggestions)
         plan = SuggestionPlan(plan_id=str(uuid.uuid4()), suggestions=suggestions)
 
         elapsed_ms = (time.perf_counter() - pipeline_start) * 1000
@@ -264,6 +266,42 @@ class TailoringSuggestionWorkflow:
             suggestion_count=len(suggestions),
         )
         return suggestions
+
+    @staticmethod
+    def _annotate_conflicts(suggestions: list[TailoringSuggestion]) -> list[TailoringSuggestion]:
+        """Populates each suggestion's `conflicts_with`, computed once over the whole plan.
+
+        Uses the exact same `compute_conflicts` that
+        `SuggestionApplier`/`DocxDocumentEditor` enforce at apply time, so
+        the review UI's proactive "these are mutually exclusive" warning
+        can never disagree with what apply actually rejects.
+
+        Also downgrades `selected_by_default` for every suggestion but the
+        first-seen one in each conflicting group -- without this, two
+        suggestions that are genuine alternatives (e.g. two different
+        rewordings of the same line) could both start pre-selected,
+        making the default selection self-contradictory the moment the
+        user clicked Apply without changing anything.
+        """
+        conflicts = compute_conflicts(suggestions)
+        annotated: list[TailoringSuggestion] = []
+        defaulted_ids: set[str] = set()
+        for suggestion in suggestions:
+            conflicts_with = conflicts.get(suggestion.suggestion_id, [])
+            selected_by_default = suggestion.selected_by_default
+            if selected_by_default and defaulted_ids.intersection(conflicts_with):
+                selected_by_default = False
+            if selected_by_default:
+                defaulted_ids.add(suggestion.suggestion_id)
+            annotated.append(
+                suggestion.model_copy(
+                    update={
+                        "conflicts_with": conflicts_with,
+                        "selected_by_default": selected_by_default,
+                    }
+                )
+            )
+        return annotated
 
     async def _generate_one_suggestion(
         self,

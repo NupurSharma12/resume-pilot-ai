@@ -278,6 +278,53 @@ async def test_apply_conflicting_suggestions_returns_409(api_client_factory) -> 
     assert response.status_code == 409
 
 
+async def test_generate_response_annotates_conflicting_suggestions(api_client_factory) -> None:
+    """Two mutually exclusive rewrites of the same item are flagged before apply is ever tried."""
+    item_id = _skills_item_id()
+    edits = PlannedEdits(
+        edits=[
+            SuggestedEdit(
+                target_section_id="section-1",
+                target_item_id=item_id,
+                operation=SuggestionOperation.APPEND,
+                reason="Add TypeScript.",
+                evidence_ids=["conversation-turn-1"],
+            ),
+            SuggestedEdit(
+                target_section_id="section-1",
+                target_item_id=item_id,
+                operation=SuggestionOperation.UPDATE,
+                reason="Reword the skills line.",
+                evidence_ids=["conversation-turn-1"],
+            ),
+        ]
+    )
+    client = await api_client_factory(
+        [
+            edits,
+            SuggestionText(
+                suggested_text="Python, TypeScript",
+                evidence_ids=["conversation-turn-1"],
+                confidence=80,
+            ),
+            SuggestionText(
+                suggested_text="Python and TypeScript expert",
+                evidence_ids=["conversation-turn-1"],
+                confidence=80,
+            ),
+        ]
+    )
+
+    response = await client.post("/v1/tailoring-suggestions", json=_generate_payload())
+
+    suggestions = response.json()["suggestions"]
+    assert len(suggestions) == 2
+    ids = {s["suggestion_id"] for s in suggestions}
+    for suggestion in suggestions:
+        other_id = next(iter(ids - {suggestion["suggestion_id"]}))
+        assert suggestion["conflicts_with"] == [other_id]
+
+
 async def test_apply_edited_text_with_unsupported_claim_returns_422(api_client_factory) -> None:
     edits, text = _append_edit_and_text()
     client = await api_client_factory([edits, text])

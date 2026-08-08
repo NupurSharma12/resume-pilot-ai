@@ -271,3 +271,64 @@ export function groupEvidenceSources(sources: string[]): EvidenceGroup[] {
   }
   return groups
 }
+
+// ---------------------------------------------------------------------------
+// Grouping by section (requirement: suggestions grouped by section, but
+// still individually selectable) and mutual-exclusion summaries
+// ---------------------------------------------------------------------------
+
+export interface SuggestionSectionGroup {
+  sectionId: string
+  sectionName: string
+  suggestions: TailoringSuggestion[]
+}
+
+// Buckets a plan's suggestions by `target_section_id`, preserving each
+// suggestion's original plan order both within a group and across groups
+// (a group's position is its first suggestion's position) -- grouping is
+// purely a visual clustering for the review list, never a reordering the
+// backend would disagree with.
+export function groupSuggestionsBySection(
+  suggestions: TailoringSuggestion[],
+  sectionNames: Map<string, string>,
+  sectionFallbackOrdinals: Map<string, number>,
+): SuggestionSectionGroup[] {
+  const order: string[] = []
+  const bySection = new Map<string, TailoringSuggestion[]>()
+  for (const suggestion of suggestions) {
+    const sectionId = suggestion.target_section_id
+    if (!bySection.has(sectionId)) {
+      bySection.set(sectionId, [])
+      order.push(sectionId)
+    }
+    bySection.get(sectionId)?.push(suggestion)
+  }
+  return order.map((sectionId) => {
+    const groupSuggestions = bySection.get(sectionId) ?? []
+    return {
+      sectionId,
+      sectionName: getReadableSectionName(groupSuggestions[0], sectionNames, sectionFallbackOrdinals),
+      suggestions: groupSuggestions,
+    }
+  })
+}
+
+// For a suggestion with a non-empty `conflicts_with`, a short human-language
+// description of each suggestion it's mutually exclusive with -- e.g.
+// "Update Full-stack engineer with React and Python experience." -- built
+// from the exact same one-line summary the conflicting card itself shows,
+// so a candidate reading "conflicts with: ..." recognizes the other card
+// instantly rather than being shown a raw suggestion id.
+export function buildConflictSummaries(suggestions: TailoringSuggestion[]): Map<string, string[]> {
+  const byId = new Map(suggestions.map((s) => [s.suggestion_id, s]))
+  const map = new Map<string, string[]>()
+  for (const suggestion of suggestions) {
+    if (suggestion.conflicts_with.length === 0) continue
+    const summaries = suggestion.conflicts_with
+      .map((id) => byId.get(id))
+      .filter((s): s is TailoringSuggestion => s !== undefined)
+      .map((s) => summarizeSuggestionChange(s))
+    map.set(suggestion.suggestion_id, summaries)
+  }
+  return map
+}

@@ -38,6 +38,7 @@ export interface TailoringSuggestion {
   selected_by_default: boolean
   validation_status: SuggestionValidationStatus
   validation_issues: string[]
+  conflicts_with: string[]
 }
 
 export type ExportFormat = 'txt' | 'markdown' | 'docx' | 'pdf'
