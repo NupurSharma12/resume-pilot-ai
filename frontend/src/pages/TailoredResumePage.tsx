@@ -9,6 +9,7 @@ import TailoringSuggestionCard from '../components/TailoringSuggestionCard'
 import TailoringPlanSummaryHeader from '../components/TailoringPlanSummaryHeader'
 import TailoringFinalResumeCard from '../components/TailoringFinalResumeCard'
 import TailoringDownloadPanel from '../components/TailoringDownloadPanel'
+import TailoringPreviewPanel from '../components/TailoringPreviewPanel'
 import { getCareerConversation } from '../lib/careerConversationApi'
 import {
   buildConflictSummaries,
@@ -28,6 +29,7 @@ import { candidateFilenameBase, detectSourceFormatFromFilename } from '../lib/so
 import { useResumeSession } from '../session/ResumeSessionContext'
 import type { DashboardOutletContext } from '../layouts/DashboardLayout'
 import type {
+  ApplySuggestionsResponse,
   ExportFormat,
   GenerateSuggestionsResponse,
 } from '../data/tailoringSuggestionsTypes'
@@ -91,6 +93,26 @@ export default function TailoredResumePage() {
   // this feature's explicit "keep the backend stateless" requirement.
   const [isRecovering, setIsRecovering] = useState(false)
   const [recoveryError, setRecoveryError] = useState('')
+  // Preview-first workflow state (see docs/features/interactive-tailored-
+  // resume.md's "Preview-first workflow"): also page-local/transient, not
+  // persisted -- a refresh always lands back on the review stage, never
+  // mid-preview, which is the same "no meaning across a reload" reasoning
+  // as isRecovering/recoveryError above. The one thing that DOES need to
+  // survive a refresh -- which suggestions are already applied -- is
+  // derived from the already-persisted `finalTailoredResume`, not from
+  // anything declared here (see `appliedIds` below).
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false)
+  const [isPreviewing, setIsPreviewing] = useState(false)
+  const [previewResult, setPreviewResult] = useState<ApplySuggestionsResponse | null>(null)
+  // "Preview Changes" and "Apply Now" are the exact same backend call
+  // (POST .../apply is a pure, stateless computation from the plan's
+  // original structured resume -- see that endpoint's docstring) --
+  // only what the frontend *does* with a successful result differs. This
+  // ref (not state -- it's read synchronously inside `attemptApply`,
+  // never rendered) records which of the two is in flight so one shared
+  // function can serve both, including through stale-plan recovery's own
+  // retry.
+  const pendingIntentRef = useRef<'preview' | 'commit'>('preview')
 
   // A tailored resume can only be grounded in a completed analysis AND a
   // *completed* Career Conversation (evidence recovery finishes there) --
@@ -111,6 +133,11 @@ export default function TailoredResumePage() {
   // effect of navigating here, of refreshing, or of no plan existing yet.
   const isGeneratingRef = useRef(false)
   const isApplyingRef = useRef(false)
+
+  function closePreview() {
+    setIsPreviewOpen(false)
+    setPreviewResult(null)
+  }
 
   const generate = useCallback(async () => {
     if (!resume || !jobDescription || !resumeAnalysis || !activeCareerConversationSessionId) return
@@ -145,6 +172,8 @@ export default function TailoredResumePage() {
       setTailoringValidationReport(null)
       setTailoringAvailableExportFormats(plan.available_export_formats)
       setTailoringSourceFormat(detectSourceFormatFromFilename(resume.fileName))
+      setIsPreviewOpen(false)
+      setPreviewResult(null)
     } catch (err) {
       setGenerateError(
         err instanceof ApiError ? err.message : 'An unexpected error occurred. Please try again.',
@@ -212,12 +241,21 @@ export default function TailoredResumePage() {
     }
   }
 
-  // Runs the actual apply call and applies its result to shared state.
-  // Throws on failure -- callers decide what a failure means (a hard
-  // error vs. a recoverable stale-plan 404).
+  // Runs the actual apply call and routes its result according to
+  // `pendingIntentRef`: a 'preview' call never touches the committed
+  // `finalTailoredResume` -- it only stores the result for the read-only
+  // preview panel to render -- while a 'commit' call is the one and only
+  // place `finalTailoredResume` (the actually-applied resume) is written.
+  // Throws on failure either way -- callers decide what a failure means
+  // (a hard error vs. a recoverable stale-plan 404).
   const attemptApply = useCallback(
     async (planId: string, selections: string[], editedTexts: Record<string, string>) => {
       const result = await applyTailoringSuggestions(planId, selections, editedTexts)
+      if (pendingIntentRef.current === 'preview') {
+        setPreviewResult(result)
+        setIsPreviewOpen(true)
+        return
+      }
       // Only ever overwritten by a *new* success -- a later failed apply
       // must never clear this, so the last good result stays visible and
       // downloadable (see this feature's docs on why).
@@ -226,6 +264,8 @@ export default function TailoredResumePage() {
         appliedSuggestionIds: result.applied_suggestion_ids,
       })
       setTailoringValidationReport(result.final_validation)
+      setIsPreviewOpen(false)
+      setPreviewResult(null)
     },
     [setFinalTailoredResume, setTailoringValidationReport],
   )
@@ -257,6 +297,11 @@ export default function TailoredResumePage() {
   // onto it (`remapSelectionsToNewPlan`), and retry the apply the user
   // actually asked for -- automatically, without a second click.
   async function recoverFromStalePlan() {
+    // A stale plan invalidates whatever the (now-abandoned) preview call
+    // was based on -- always drop back to the review stage first, where
+    // the familiar "Refreshing tailoring suggestions…" banner below
+    // already handles both intents identically.
+    closePreview()
     if (!resume || !jobDescription || !resumeAnalysis || !activeCareerConversationSessionId) {
       // No context left to regenerate from (e.g. the session itself was
       // cleared) -- nothing left to try automatically.
@@ -314,28 +359,48 @@ export default function TailoredResumePage() {
     }
   }
 
-  const handleApply = useCallback(async () => {
-    if (!tailoringPlan) return
-    if (isApplyingRef.current) return
-    isApplyingRef.current = true
-    setIsApplying(true)
-    setApplyError('')
-    setRevalidationErrors({})
-    setRecoveryError('')
-    try {
-      await attemptApply(tailoringPlan.plan_id, tailoringSelections, tailoringEditedTexts)
-    } catch (err) {
-      if (err instanceof ApiError && err.cause === 'not_found') {
-        await recoverFromStalePlan()
-      } else {
-        classifyAndSetApplyError(err)
+  // Drives both "Preview Changes" (intent: 'preview') and "Apply Now"
+  // (intent: 'commit') -- see `attemptApply`'s docstring for why one
+  // function can serve both. A non-404 failure of a 'commit' call closes
+  // the preview panel so the failure is shown where a candidate would
+  // look for it (the per-suggestion revalidation note or the review
+  // stage's error banner) rather than leaving them stranded in a preview
+  // that no longer reflects reality; `finalTailoredResume` from any
+  // earlier successful apply is never touched by a failed attempt either
+  // way, so the last good result stays visible and downloadable.
+  const runApplyFlow = useCallback(
+    async (intent: 'preview' | 'commit') => {
+      if (!tailoringPlan) return
+      if (isApplyingRef.current) return
+      isApplyingRef.current = true
+      pendingIntentRef.current = intent
+      if (intent === 'preview') setIsPreviewing(true)
+      else setIsApplying(true)
+      setApplyError('')
+      setRevalidationErrors({})
+      setRecoveryError('')
+      try {
+        await attemptApply(tailoringPlan.plan_id, tailoringSelections, tailoringEditedTexts)
+      } catch (err) {
+        if (err instanceof ApiError && err.cause === 'not_found') {
+          await recoverFromStalePlan()
+        } else {
+          if (intent === 'commit') closePreview()
+          classifyAndSetApplyError(err)
+        }
+      } finally {
+        setIsApplying(false)
+        setIsPreviewing(false)
+        isApplyingRef.current = false
       }
-    } finally {
-      setIsApplying(false)
-      isApplyingRef.current = false
-    }
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tailoringPlan, tailoringSelections, tailoringEditedTexts, attemptApply])
+    [tailoringPlan, tailoringSelections, tailoringEditedTexts, attemptApply],
+  )
+
+  function revertAppliedSuggestion(suggestionId: string) {
+    setTailoringSelections(tailoringSelections.filter((id) => id !== suggestionId))
+  }
 
   const handleDownload = useCallback(
     async (format: ExportFormat) => {
@@ -395,6 +460,21 @@ export default function TailoredResumePage() {
   const conflictSummaries = useMemo(
     () => buildConflictSummaries(tailoringPlan?.suggestions ?? []),
     [tailoringPlan],
+  )
+  // The set of suggestion ids actually committed by the last successful
+  // "Apply Now" -- deliberately *not* separate page state: since apply is
+  // a pure recomputation from the plan's original structured resume (see
+  // attemptApply's docstring), `finalTailoredResume.appliedSuggestionIds`
+  // is always already the full, current, phased-apply history, and it's
+  // already persisted through `ResumeSessionProvider` for free. A
+  // suggestion only counts as "Applied" in the UI while it's *also* still
+  // selected -- Undo (`revertAppliedSuggestion`) removes it from
+  // `tailoringSelections`, which is enough to make it look pending again
+  // immediately, even before the next Preview/Apply catches the resume
+  // text itself up.
+  const appliedIds = useMemo(
+    () => new Set(finalTailoredResume?.appliedSuggestionIds ?? []),
+    [finalTailoredResume],
   )
 
   function applyRecommendedSelection() {
@@ -460,6 +540,25 @@ export default function TailoredResumePage() {
                   Generate Tailoring Plan
                 </Button>
               </div>
+            ) : isPreviewOpen && previewResult ? (
+              // Stage: Preview Changes -- a focused, read-only look at what
+              // the current selection would produce, deliberately the only
+              // thing on screen (see requirement "do not overload the page
+              // with too much text at once"). Selection can't change here;
+              // "Back to Suggestions" is the only way out other than
+              // committing.
+              <TailoringPreviewPanel
+                originalResumeText={resume?.text ?? ''}
+                previewResumeText={previewResult.final_resume_text}
+                includedSuggestions={tailoringPlan.suggestions.filter((s) =>
+                  tailoringSelections.includes(s.suggestion_id),
+                )}
+                alreadyAppliedIds={appliedIds}
+                isApplying={isApplying || isRecovering}
+                applyError={applyError || null}
+                onBack={closePreview}
+                onApplyNow={() => runApplyFlow('commit')}
+              />
             ) : (
               <>
                 <TailoringPlanSummaryHeader
@@ -518,6 +617,11 @@ export default function TailoredResumePage() {
                               conflictSummaries={
                                 conflictSummaries.get(suggestion.suggestion_id) ?? []
                               }
+                              isApplied={
+                                appliedIds.has(suggestion.suggestion_id) &&
+                                tailoringSelections.includes(suggestion.suggestion_id)
+                              }
+                              onRevertApplied={() => revertAppliedSuggestion(suggestion.suggestion_id)}
                             />
                           ))}
                         </ul>
@@ -548,27 +652,29 @@ export default function TailoredResumePage() {
                   </p>
                 </div>
 
-                {/* Stage 4: Apply Selected Changes */}
+                {/* Stage 2: Preview Changes -- the only way into applying;
+                    there is no direct "apply" action from this stage
+                    anymore (see this feature's "Preview-first workflow"
+                    docs for why). */}
                 <div className="rounded-2xl border border-gray-200 bg-white p-6">
                   <div className="flex flex-wrap items-center justify-between gap-4">
                     <div>
-                      <h3 className="font-semibold text-gray-900">Apply Selected Changes</h3>
+                      <h3 className="font-semibold text-gray-900">Preview Changes</h3>
                       <p className="mt-1 text-sm text-gray-500">
-                        Only the suggestions you selected above will be applied. Nothing else
-                        changes.
+                        See exactly what your resume will look like before anything is applied.
                       </p>
                     </div>
                     <Button
                       variant="solid"
                       icon={<Wand2 size={16} />}
-                      disabled={selectedCount === 0 || isApplying}
-                      onClick={handleApply}
+                      disabled={selectedCount === 0 || isPreviewing || isApplying}
+                      onClick={() => runApplyFlow('preview')}
                     >
                       {isRecovering
                         ? 'Applying…'
-                        : isApplying
-                          ? 'Applying…'
-                          : 'Apply Selected Changes'}
+                        : isPreviewing
+                          ? 'Loading preview…'
+                          : 'Preview Changes'}
                     </Button>
                   </div>
                   {isRecovering && (
@@ -596,7 +702,7 @@ export default function TailoredResumePage() {
                   )}
                 </div>
 
-                {/* Stage 5: Preview and Download */}
+                {/* Stage 4: Final Resume */}
                 {finalTailoredResume && tailoringValidationReport && (
                   <>
                     <TailoringFinalResumeCard
@@ -606,6 +712,7 @@ export default function TailoredResumePage() {
                       validationReport={tailoringValidationReport}
                       sectionNames={sectionNames}
                       sectionFallbackOrdinals={sectionFallbackOrdinals}
+                      onContinueEditing={scrollToSuggestions}
                     />
                     {availableFormats.length > 0 && (
                       <TailoringDownloadPanel

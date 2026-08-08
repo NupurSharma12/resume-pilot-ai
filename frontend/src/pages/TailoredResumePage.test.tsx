@@ -232,6 +232,41 @@ describe('TailoredResumePage: generation is never automatic', () => {
     expect(mockedCareerConversationApi.getCareerConversation).not.toHaveBeenCalled()
     expect(mockedTailoringApi.generateTailoringSuggestions).not.toHaveBeenCalled()
   })
+
+  it('shows a previously applied suggestion as already "Applied" and greyed out on a fresh page load, with no click required', () => {
+    // Simulates a browser refresh: nothing was clicked this render, the
+    // mocked session hook returns exactly what would have been restored
+    // from persisted storage (see `finalTailoredResume`'s docstring in
+    // resumeSessionTypes.ts -- it's part of the persisted session shape).
+    mockedUseResumeSession.mockReturnValue(
+      makeResumeSessionValue({
+        tailoringPlan: fixtureGenerateSuggestionsResponse,
+        tailoringSelections: ['suggestion-0', 'suggestion-1'],
+        tailoringAvailableExportFormats: fixtureGenerateSuggestionsResponse.available_export_formats,
+        finalTailoredResume: {
+          finalResumeText: fixtureApplySuggestionsResponse.final_resume_text,
+          appliedSuggestionIds: fixtureApplySuggestionsResponse.applied_suggestion_ids,
+        },
+        tailoringValidationReport: fixtureApplySuggestionsResponse.final_validation,
+      }),
+    )
+
+    renderPage()
+
+    // Both the badge and the locked checkbox's own label read "Applied".
+    expect(screen.getAllByText('Applied').length).toBeGreaterThanOrEqual(2)
+    const appliedCheckbox = screen.getByRole('checkbox', {
+      name: /accept suggestion: add typescript/i,
+    })
+    expect(appliedCheckbox).toBeDisabled()
+    expect(appliedCheckbox).toBeChecked()
+    // The other, never-applied suggestion looks like a completely normal,
+    // still-editable pending suggestion.
+    const pendingCheckbox = screen.getByRole('checkbox', {
+      name: /accept suggestion: add led the migration/i,
+    })
+    expect(pendingCheckbox).not.toBeDisabled()
+  })
 })
 
 describe('TailoredResumePage: generating suggestions', () => {
@@ -370,6 +405,15 @@ describe('TailoredResumePage: reviewing and selecting suggestions', () => {
     expect(screen.getByText(fixtureSuggestionInsert.suggested_text)).toBeInTheDocument()
   })
 
+  it('opening a per-suggestion Preview Change never calls the apply endpoint', () => {
+    renderWithPlan()
+
+    fireEvent.click(screen.getAllByRole('button', { name: /preview change/i })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: /preview change/i })[1])
+
+    expect(mockedTailoringApi.applyTailoringSuggestions).not.toHaveBeenCalled()
+  })
+
   it('shows a human-readable section name, never the internal section id', () => {
     renderWithPlan()
 
@@ -442,7 +486,7 @@ describe('TailoredResumePage: reviewing and selecting suggestions', () => {
       target: { value: 'Python, TypeScript, and GraphQL' },
     })
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
-    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+    fireEvent.click(screen.getByRole('button', { name: /preview changes/i }))
 
     await waitFor(() =>
       expect(mockedTailoringApi.applyTailoringSuggestions).toHaveBeenCalledWith(
@@ -562,7 +606,7 @@ describe('TailoredResumePage: section grouping and mutually exclusive suggestion
   })
 })
 
-describe('TailoredResumePage: applying selected changes', () => {
+describe('TailoredResumePage: preview-first workflow (Preview Changes then Apply Now)', () => {
   function renderWithPlan(overrides: Partial<PersistedResumeSession> = {}) {
     return renderPageWithRealSession({
       tailoringPlan: fixtureGenerateSuggestionsResponse,
@@ -572,19 +616,40 @@ describe('TailoredResumePage: applying selected changes', () => {
     })
   }
 
+  // "Preview Changes" and "Apply Now" call the exact same backend endpoint
+  // (POST .../apply is a pure, stateless computation -- see
+  // TailoredResumePage's `attemptApply` docstring) -- only what the
+  // frontend does with a successful result differs, so opening the
+  // preview never requires a second, different mock.
+  async function openPreview() {
+    fireEvent.click(screen.getByRole('button', { name: /preview changes/i }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /apply now/i })).toBeInTheDocument(),
+    )
+  }
+
   it('is disabled when no suggestions are selected', () => {
     renderWithPlan({ tailoringSelections: [] })
 
-    expect(screen.getByRole('button', { name: /apply selected changes/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /preview changes/i })).toBeDisabled()
   })
 
-  it('sends only the selected suggestion ids, not unselected ones', async () => {
+  it('does not apply anything just from selecting suggestions -- Preview Changes only previews', async () => {
+    mockedTailoringApi.applyTailoringSuggestions.mockResolvedValue(fixtureApplySuggestionsResponse)
+
+    renderWithPlan()
+
+    expect(mockedTailoringApi.applyTailoringSuggestions).not.toHaveBeenCalled()
+    expect(screen.queryByText(/final resume preview/i)).not.toBeInTheDocument()
+  })
+
+  it('sends only the selected suggestion ids, not unselected ones, when previewing', async () => {
     mockedTailoringApi.applyTailoringSuggestions.mockResolvedValue(fixtureApplySuggestionsResponse)
 
     renderWithPlan()
     // Deselect the second suggestion.
     fireEvent.click(screen.getAllByRole('checkbox')[1])
-    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+    fireEvent.click(screen.getByRole('button', { name: /preview changes/i }))
 
     await waitFor(() =>
       expect(mockedTailoringApi.applyTailoringSuggestions).toHaveBeenCalledWith(
@@ -595,18 +660,80 @@ describe('TailoredResumePage: applying selected changes', () => {
     )
   })
 
-  it('shows the final resume preview and applied-changes summary after a successful apply', async () => {
+  it('shows a read-only preview panel first, without committing anything', async () => {
     mockedTailoringApi.applyTailoringSuggestions.mockResolvedValue(fixtureApplySuggestionsResponse)
 
     renderWithPlan()
-    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+    await openPreview()
 
-    await waitFor(() =>
-      expect(screen.getByText(/final resume preview/i)).toBeInTheDocument(),
-    )
-    expect(screen.getByText((_, el) => el?.tagName === 'PRE' && el.textContent === fixtureApplySuggestionsResponse.final_resume_text)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: /preview changes/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /back to suggestions/i })).toBeInTheDocument()
+    // Nothing is committed yet -- no "Final Resume Preview" (the
+    // post-commit card) and no change to what's persisted as applied.
+    expect(screen.queryByText(/final resume preview/i)).not.toBeInTheDocument()
+  })
+
+  it('returns to the review stage without losing the selection when going back from preview', async () => {
+    mockedTailoringApi.applyTailoringSuggestions.mockResolvedValue(fixtureApplySuggestionsResponse)
+
+    renderWithPlan()
+    await openPreview()
+    fireEvent.click(screen.getByRole('button', { name: /back to suggestions/i }))
+
+    expect(screen.getByText('2 of 2 selected')).toBeInTheDocument()
+    expect(screen.getAllByRole('checkbox').every((checkbox) => (checkbox as HTMLInputElement).checked)).toBe(true)
+  })
+
+  it('shows the final resume preview and applied-changes summary only after Apply Now is confirmed', async () => {
+    mockedTailoringApi.applyTailoringSuggestions.mockResolvedValue(fixtureApplySuggestionsResponse)
+
+    renderWithPlan()
+    await openPreview()
+    fireEvent.click(screen.getByRole('button', { name: /apply now/i }))
+
+    await waitFor(() => expect(screen.getByText(/final resume preview/i)).toBeInTheDocument())
+    expect(
+      screen.getByText(
+        (_, el) => el?.tagName === 'PRE' && el.textContent === fixtureApplySuggestionsResponse.final_resume_text,
+      ),
+    ).toBeInTheDocument()
     expect(screen.getByText(/applied changes \(1\)/i)).toBeInTheDocument()
     expect(screen.getByText(/not included \(1\)/i)).toBeInTheDocument()
+    // Apply Now commits and returns to the review stage.
+    expect(screen.queryByRole('button', { name: /apply now/i })).not.toBeInTheDocument()
+  })
+
+  it('marks an applied suggestion as "Applied", greys it out, and locks its checkbox', async () => {
+    mockedTailoringApi.applyTailoringSuggestions.mockResolvedValue(fixtureApplySuggestionsResponse)
+
+    renderWithPlan()
+    await openPreview()
+    fireEvent.click(screen.getByRole('button', { name: /apply now/i }))
+
+    await waitFor(() => expect(screen.getAllByText('Applied').length).toBeGreaterThan(0))
+    const appliedCheckbox = screen.getByRole('checkbox', {
+      name: /accept suggestion: add typescript/i,
+    })
+    expect(appliedCheckbox).toBeDisabled()
+    expect(appliedCheckbox).toBeChecked()
+  })
+
+  it('lets the user undo an applied suggestion, reverting it to a normal pending selection', async () => {
+    mockedTailoringApi.applyTailoringSuggestions.mockResolvedValue(fixtureApplySuggestionsResponse)
+
+    renderWithPlan()
+    await openPreview()
+    fireEvent.click(screen.getByRole('button', { name: /apply now/i }))
+    await waitFor(() => expect(screen.getAllByText('Applied').length).toBeGreaterThan(0))
+
+    fireEvent.click(screen.getByRole('button', { name: /^undo$/i }))
+
+    expect(screen.queryByText('Applied')).not.toBeInTheDocument()
+    const revertedCheckbox = screen.getByRole('checkbox', {
+      name: /accept suggestion: add typescript/i,
+    })
+    expect(revertedCheckbox).not.toBeDisabled()
+    expect(revertedCheckbox).not.toBeChecked()
   })
 
   it('shows an actionable inline error for a revalidation failure (422) without losing selections', async () => {
@@ -617,19 +744,23 @@ describe('TailoredResumePage: applying selected changes', () => {
     )
 
     renderWithPlan()
-    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+    fireEvent.click(screen.getByRole('button', { name: /preview changes/i }))
 
     await waitFor(() => expect(screen.getByText(/contains kubernetes/i)).toBeInTheDocument())
     expect(screen.getByText('2 of 2 selected')).toBeInTheDocument()
+    // The failure happened before any preview could be shown.
+    expect(screen.queryByRole('button', { name: /apply now/i })).not.toBeInTheDocument()
   })
 
-  it('preserves the last successful final resume after a later apply failure', async () => {
-    mockedTailoringApi.applyTailoringSuggestions.mockResolvedValueOnce(
-      fixtureApplySuggestionsResponse,
-    )
+  it('preserves the last successful final resume after a later preview failure', async () => {
+    // One resolved call for "Preview Changes", one more for "Apply Now".
+    mockedTailoringApi.applyTailoringSuggestions
+      .mockResolvedValueOnce(fixtureApplySuggestionsResponse)
+      .mockResolvedValueOnce(fixtureApplySuggestionsResponse)
 
     renderWithPlan()
-    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+    await openPreview()
+    fireEvent.click(screen.getByRole('button', { name: /apply now/i }))
     await waitFor(() =>
       expect(screen.getByText((_, el) => el?.tagName === 'PRE' && el.textContent === fixtureApplySuggestionsResponse.final_resume_text)).toBeInTheDocument(),
     )
@@ -637,7 +768,7 @@ describe('TailoredResumePage: applying selected changes', () => {
     mockedTailoringApi.applyTailoringSuggestions.mockRejectedValueOnce(
       new ApiError('Something went wrong applying changes.'),
     )
-    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+    fireEvent.click(screen.getByRole('button', { name: /preview changes/i }))
 
     await waitFor(() =>
       expect(screen.getByText(/something went wrong applying changes/i)).toBeInTheDocument(),
@@ -685,10 +816,10 @@ describe('TailoredResumePage: stale-plan recovery (backend restart / 404)', () =
     mockedTailoringApi.applyTailoringSuggestions.mockResolvedValueOnce(fixtureApplySuggestionsResponse)
 
     renderWithPlan()
-    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+    fireEvent.click(screen.getByRole('button', { name: /preview changes/i }))
 
     await waitFor(() =>
-      expect(screen.getByText((_, el) => el?.tagName === 'PRE')).toBeInTheDocument(),
+      expect(screen.getByRole('button', { name: /apply now/i })).toBeInTheDocument(),
     )
     expect(screen.queryByText(/tailoring suggestion plan not found/i)).not.toBeInTheDocument()
   })
@@ -705,7 +836,7 @@ describe('TailoredResumePage: stale-plan recovery (backend restart / 404)', () =
     )
 
     renderWithPlan()
-    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+    fireEvent.click(screen.getByRole('button', { name: /preview changes/i }))
 
     await waitFor(() =>
       expect(screen.getByText(/refreshing tailoring suggestions/i)).toBeInTheDocument(),
@@ -728,7 +859,7 @@ describe('TailoredResumePage: stale-plan recovery (backend restart / 404)', () =
     mockedTailoringApi.applyTailoringSuggestions.mockResolvedValueOnce(fixtureApplySuggestionsResponse)
 
     renderWithPlan({ tailoringCustomInstructions: 'Keep it under two pages.' })
-    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+    fireEvent.click(screen.getByRole('button', { name: /preview changes/i }))
 
     await waitFor(() =>
       expect(mockedTailoringApi.generateTailoringSuggestions).toHaveBeenCalledWith(
@@ -742,7 +873,7 @@ describe('TailoredResumePage: stale-plan recovery (backend restart / 404)', () =
     )
   })
 
-  it('restores selections by semantic match and retries apply automatically with the new plan id', async () => {
+  it('restores selections by semantic match and retries the same request automatically with the new plan id', async () => {
     mockStalePlan404()
     mockedCareerConversationApi.getCareerConversation.mockResolvedValue(fixtureCompletedSession)
     mockedTailoringApi.generateTailoringSuggestions.mockResolvedValue(regeneratedPlan)
@@ -750,7 +881,7 @@ describe('TailoredResumePage: stale-plan recovery (backend restart / 404)', () =
 
     // Only suggestion-0 (append) selected beforehand.
     renderWithPlan({ tailoringSelections: ['suggestion-0'] })
-    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+    fireEvent.click(screen.getByRole('button', { name: /preview changes/i }))
 
     await waitFor(() =>
       expect(mockedTailoringApi.applyTailoringSuggestions).toHaveBeenLastCalledWith(
@@ -759,7 +890,7 @@ describe('TailoredResumePage: stale-plan recovery (backend restart / 404)', () =
         {},
       ),
     )
-    // The user never had to click Apply a second time.
+    // The user never had to click Preview a second time.
     expect(mockedTailoringApi.applyTailoringSuggestions).toHaveBeenCalledTimes(2)
   })
 
@@ -773,7 +904,7 @@ describe('TailoredResumePage: stale-plan recovery (backend restart / 404)', () =
       tailoringSelections: ['suggestion-0'],
       tailoringEditedTexts: { 'suggestion-0': 'Python, TypeScript, and Node.js' },
     })
-    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+    fireEvent.click(screen.getByRole('button', { name: /preview changes/i }))
 
     await waitFor(() =>
       expect(mockedTailoringApi.applyTailoringSuggestions).toHaveBeenLastCalledWith(
@@ -784,21 +915,17 @@ describe('TailoredResumePage: stale-plan recovery (backend restart / 404)', () =
     )
   })
 
-  it('shows the final resume preview after a successful automatic retry, with no second click', async () => {
+  it('shows the preview panel after a successful automatic retry, with no second click', async () => {
     mockStalePlan404()
     mockedCareerConversationApi.getCareerConversation.mockResolvedValue(fixtureCompletedSession)
     mockedTailoringApi.generateTailoringSuggestions.mockResolvedValue(regeneratedPlan)
     mockedTailoringApi.applyTailoringSuggestions.mockResolvedValueOnce(fixtureApplySuggestionsResponse)
 
     renderWithPlan()
-    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+    fireEvent.click(screen.getByRole('button', { name: /preview changes/i }))
 
     await waitFor(() =>
-      expect(
-        screen.getByText(
-          (_, el) => el?.tagName === 'PRE' && el.textContent === fixtureApplySuggestionsResponse.final_resume_text,
-        ),
-      ).toBeInTheDocument(),
+      expect(screen.getByRole('button', { name: /apply now/i })).toBeInTheDocument(),
     )
   })
 
@@ -810,7 +937,7 @@ describe('TailoredResumePage: stale-plan recovery (backend restart / 404)', () =
     )
 
     renderWithPlan()
-    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+    fireEvent.click(screen.getByRole('button', { name: /preview changes/i }))
 
     await waitFor(() =>
       expect(screen.getByText(/we need to regenerate your tailoring suggestions/i)).toBeInTheDocument(),
@@ -829,7 +956,7 @@ describe('TailoredResumePage: stale-plan recovery (backend restart / 404)', () =
     )
 
     renderWithPlan()
-    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+    fireEvent.click(screen.getByRole('button', { name: /preview changes/i }))
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /regenerate suggestions/i })).toBeInTheDocument(),
     )
@@ -839,11 +966,7 @@ describe('TailoredResumePage: stale-plan recovery (backend restart / 404)', () =
     fireEvent.click(screen.getByRole('button', { name: /regenerate suggestions/i }))
 
     await waitFor(() =>
-      expect(
-        screen.getByText(
-          (_, el) => el?.tagName === 'PRE' && el.textContent === fixtureApplySuggestionsResponse.final_resume_text,
-        ),
-      ).toBeInTheDocument(),
+      expect(screen.getByRole('button', { name: /apply now/i })).toBeInTheDocument(),
     )
   })
 
@@ -853,11 +976,39 @@ describe('TailoredResumePage: stale-plan recovery (backend restart / 404)', () =
     )
 
     renderWithPlan()
-    fireEvent.click(screen.getByRole('button', { name: /apply selected changes/i }))
+    fireEvent.click(screen.getByRole('button', { name: /preview changes/i }))
 
     await waitFor(() => expect(screen.getByText(/something went wrong\./i)).toBeInTheDocument())
     expect(mockedTailoringApi.generateTailoringSuggestions).not.toHaveBeenCalled()
     expect(screen.queryByRole('button', { name: /regenerate suggestions/i })).not.toBeInTheDocument()
+  })
+
+  it('also recovers automatically when Apply Now itself hits a stale plan after a successful preview, ending in a committed final resume', async () => {
+    mockedCareerConversationApi.getCareerConversation.mockResolvedValue(fixtureCompletedSession)
+    mockedTailoringApi.generateTailoringSuggestions.mockResolvedValue(regeneratedPlan)
+    // 1st call (Preview Changes) succeeds; 2nd call (Apply Now) discovers
+    // the plan went stale in the meantime; 3rd call is the automatic
+    // commit retry against the freshly regenerated plan.
+    mockedTailoringApi.applyTailoringSuggestions
+      .mockResolvedValueOnce(fixtureApplySuggestionsResponse)
+      .mockRejectedValueOnce(new ApiError('Tailoring suggestion plan not found.', { cause: 'not_found' }))
+      .mockResolvedValueOnce(fixtureApplySuggestionsResponse)
+
+    renderWithPlan({ tailoringSelections: ['suggestion-0'] })
+    fireEvent.click(screen.getByRole('button', { name: /preview changes/i }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /apply now/i })).toBeInTheDocument(),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /apply now/i }))
+
+    await waitFor(() => expect(screen.getByText(/final resume preview/i)).toBeInTheDocument())
+    expect(mockedTailoringApi.applyTailoringSuggestions).toHaveBeenLastCalledWith(
+      regeneratedPlan.plan_id,
+      ['suggestion-70'],
+      {},
+    )
+    expect(mockedTailoringApi.applyTailoringSuggestions).toHaveBeenCalledTimes(3)
+    expect(screen.queryByText(/tailoring suggestion plan not found/i)).not.toBeInTheDocument()
   })
 })
 

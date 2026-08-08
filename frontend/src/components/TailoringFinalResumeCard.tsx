@@ -1,4 +1,5 @@
 import Badge from './Badge'
+import Button from './Button'
 import type { FinalValidationReport, TailoringSuggestion } from '../data/tailoringSuggestionsTypes'
 import { getReadableSectionName } from '../lib/suggestionPresentation'
 
@@ -12,6 +13,11 @@ interface TailoringFinalResumeCardProps {
   // than recomputed here, and never the raw `target_section_id`.
   sectionNames: Map<string, string>
   sectionFallbackOrdinals: Map<string, number>
+  // Scrolls back up to the review list -- this card is never a dead end:
+  // applying is phased, so a candidate is always expected to be able to
+  // keep selecting/previewing/applying more suggestions afterward (see
+  // this feature's "Preview-first workflow" docs).
+  onContinueEditing: () => void
 }
 
 // Stage 4/5's result card: the assembled final resume (plain-text
@@ -29,6 +35,7 @@ export default function TailoringFinalResumeCard({
   validationReport,
   sectionNames,
   sectionFallbackOrdinals,
+  onContinueEditing,
 }: TailoringFinalResumeCardProps) {
   const appliedIds = new Set(appliedSuggestionIds)
   const applied = allSuggestions.filter((s) => appliedIds.has(s.suggestion_id))
@@ -37,10 +44,17 @@ export default function TailoringFinalResumeCard({
   return (
     <div className="space-y-4">
       <div className="rounded-2xl border border-gray-200 bg-white p-6">
-        <h3 className="font-semibold text-gray-900">Final Resume Preview</h3>
-        <p className="mt-1 text-sm text-gray-500">
-          An ATS-friendly preview of your resume with only the changes you approved.
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h3 className="font-semibold text-gray-900">Final Resume Preview</h3>
+            <p className="mt-1 text-sm text-gray-500">
+              An ATS-friendly preview of your resume with only the changes you approved.
+            </p>
+          </div>
+          <Button variant="outline" onClick={onContinueEditing}>
+            Continue Editing
+          </Button>
+        </div>
         <pre className="mt-4 max-h-[32rem] overflow-y-auto whitespace-pre-wrap rounded-xl border border-gray-100 bg-gray-50 p-4 font-sans text-sm text-gray-800">
           {finalResumeText}
         </pre>

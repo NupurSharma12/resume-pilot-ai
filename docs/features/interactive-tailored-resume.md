@@ -406,11 +406,16 @@ containing an error message instead of surfacing the real failure.
 anchor click, and revokes the URL in a `finally` block so it's cleaned up
 even if the click itself throws.
 
-### `TailoredResumePage` — five stages, one page
+### `TailoredResumePage` — a preview-first, phased workflow, one page
 
-No stage is a separate route; all five render conditionally in one page
-based on shared state, so a refresh at any point re-derives the correct
-stage with zero network calls:
+No stage is a separate route; every stage renders conditionally in one
+page based on shared state, so a refresh at any point re-derives the
+correct stage with zero network calls. Selecting suggestions never
+applies anything by itself — the only path to actually changing the
+resume is Review → **Preview** → **Apply Now**, and applying is phased:
+a candidate can select a few suggestions, preview, apply, then keep
+selecting more later, with each earlier phase's result staying visibly
+"Applied" the whole time.
 
 1. **Generate Tailoring Plan** — gated on completed analysis *and* a
    *completed* Career Conversation (not just an active session id — the
@@ -437,18 +442,47 @@ stage with zero network calls:
    do). An **Edit** action is offered per suggestion (backed by the apply
    endpoint's real revalidation support — not a fake/local-only edit):
    edited text is tracked separately from the original, marked with an
-   "Edited" badge, and **Reset** restores the model-generated text.
+   "Edited" badge, and **Reset** restores the model-generated text. A
+   suggestion that was already committed in an earlier phase (see below)
+   renders locked and greyed out with an "Applied" badge instead of its
+   normal checkbox/Customize controls, plus an **Undo** action.
 3. **Custom Instructions** — a free-text field ("Anything else you want
    to change?"), persisted, applied to the *next* generate/regenerate
    call.
-4. **Apply Selected Changes** — disabled with zero selections. Sends
-   `plan_id`, selected ids, and `edited_texts` (only for selected,
-   edited suggestions). A `422` revalidation failure is parsed for the
-   named suggestion id and shown inline on that suggestion's card where
-   possible, otherwise as a banner — the plan and selections are never
-   reset by a failed apply. A later failed apply never clears a
-   previously successful `finalTailoredResume`.
-5. **Preview and Download** — a plain-text ATS-friendly preview, an
+4. **Preview Changes** — the only CTA available from the review stage;
+   there is no direct "apply" action here. Clicking it calls the apply
+   endpoint with the *current* selection and, on success, renders a
+   read-only, GitHub-diff-style `TailoringPreviewPanel` instead of the
+   review list — nothing about the resume changes yet. The panel:
+   - Diffs the resume text the candidate started with against the
+     previewed result, section by section (`resumeSectionDiff.ts`'s
+     `buildSectionDiffs`), with a tab per section (changed ones marked)
+     for one-section-at-a-time inspection, matching sections by their
+     heading text (suggestions never target a heading, only an item, so
+     headings are stable across every operation).
+   - Lists which suggestions are included, distinguishing ones newly
+     selected this phase from ones already applied in an earlier phase.
+   - Offers exactly two actions: **Back to Suggestions** (discards the
+     preview, keeps the selection exactly as it was — nothing is lost)
+     or **Apply Now** (commits it). The panel is deliberately read-only —
+     there is no way to change the selection while it's open — so what's
+     on screen can never silently drift from what Apply Now is about to
+     commit; changing the selection always means going back and
+     previewing again.
+   - **Apply Now** re-calls the same endpoint with the same selection and
+     writes the result to `finalTailoredResume`, returning to the review
+     stage. A `422` revalidation failure is parsed for the named
+     suggestion id and shown inline on that suggestion's card where
+     possible, otherwise as a banner on the review stage (any non-404
+     failure at this step closes the preview panel first, so the error
+     is always shown where a candidate would actually look for it) — the
+     plan and selections are never reset by a failed apply, and a later
+     failed attempt never clears a previously successful
+     `finalTailoredResume`.
+5. **Final Resume** — not a separate page, just what's rendered below the
+   review stage once `finalTailoredResume` exists: a plain-text
+   ATS-friendly preview with a **Continue Editing** action (scrolls back
+   to the suggestion list — the workflow is never a dead end), an
    applied-vs-not-included summary (every suggestion in the plan is
    accounted for one way or the other), the final validation report, and
    `TailoringDownloadPanel`: only formats the backend actually reported
@@ -457,6 +491,31 @@ stage with zero network calls:
    DOCX" / "Regenerated PDF" — never implying original styling survived).
    A failed export shows an inline error next to the download controls
    without touching the preview above it.
+
+#### Phased apply and Undo are frontend-only — an honest limitation
+
+There is no backend concept of "phases," an "applied" list, or a revert
+endpoint, and none was added for this feature (POST `.../apply` is
+unchanged). This works because apply is a pure, stateless computation
+from the plan's original structured resume (see "Deterministic
+application" above) — the *same* selection ids always produce the *same*
+result, regardless of how many times or in what order Apply Now was
+clicked before. `TailoredResumePage` exploits exactly that property:
+- "Applied" is derived, not stored separately —
+  `finalTailoredResume.appliedSuggestionIds` (from the last successful
+  Apply Now) already *is* the full phased-apply history, because every
+  Apply Now always sends the *entire* current selection, not just what's
+  newly checked since the last phase.
+- **Undo** removes a suggestion from `tailoringSelections` client-side
+  only. It does not, and cannot, retroactively edit an already-downloaded
+  file or a resume state that only ever existed as one HTTP response the
+  backend has already forgotten (`TailoringPlanStore` is in-memory and
+  stores only the *plan*, never an "applied" state — see "Trust
+  boundary" above). What it *does* do correctly: the very next Preview or
+  Apply Now call omits that suggestion, so the resume text it produces
+  no longer reflects it — the same statelessness that makes phasing work
+  makes "undo, then apply again" work too, just never instantaneously
+  for a resume already downloaded.
 
 ### CTA lifecycle (`TailoredResumeBanner`, `ConversationCompleteCard`)
 
@@ -555,6 +614,23 @@ never be pre-selected as if it were "the original format."
   forces the model to actually do so for a given resume/job description;
   an unusually terse or evidence-sparse Planner response could still
   legitimately produce fewer, coarser suggestions.
+- **Phased apply and Undo are frontend-only state, not a backend
+  feature.** See "Phased apply and Undo are frontend-only" above for the
+  full reasoning — there is no backend "applied" record or revert
+  endpoint; it works only because apply is a pure, stateless
+  recomputation from the plan's original resume. Undo can prevent a
+  suggestion from being included in the *next* Preview/Apply Now call; it
+  cannot retroactively change a resume already downloaded from an earlier
+  Apply Now.
+- **Preview's section-by-section diff is a display heuristic, not a
+  structural diff.** `resumeSectionDiff.ts` splits both the original and
+  previewed plain text into sections by blank-line boundaries and matches
+  them by heading text — it has no access to the backend's actual
+  `StructuredResume` (only the assembled `final_resume_text` string), so
+  an unconventional resume layout could produce a slightly odd section
+  split in the preview. This never affects what's actually applied,
+  which always comes from the backend's own structured computation, only
+  how the preview is visually organized.
 - **Markdown headings from a Markdown upload aren't semantically parsed.**
   The parser's heading heuristic (ALL CAPS or a common-heading keyword
   match) doesn't understand `#`/`##` Markdown syntax, so a Markdown
