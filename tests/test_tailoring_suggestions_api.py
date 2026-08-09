@@ -15,19 +15,30 @@ frontend's dev origin could not read `Content-Disposition`/
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.api.v1.endpoints.tailoring_suggestions import get_tailoring_suggestion_workflow
+from app.api.v1.endpoints.tailoring_suggestions import (
+    get_post_apply_analysis_workflow,
+    get_tailoring_suggestion_workflow,
+)
 from app.app import create_app
 from app.core.config import Settings
 from app.evidence.evidence_store_builder import EvidenceStoreBuilder
+from app.models.resume_analysis import (
+    HiringRecommendation,
+    OverallAssessment,
+    ResumeAnalysisResult,
+    SkillMatch,
+)
 from app.models.tailoring_suggestions import (
     PlannedEdits,
     SuggestedEdit,
     SuggestionOperation,
     SuggestionText,
 )
+from app.prompts.resume_analysis_prompt_builder import ResumeAnalysisPromptBuilder
 from app.prompts.suggestion_planner_prompt_builder import SuggestionPlannerPromptBuilder
 from app.prompts.suggestion_rewrite_prompt_builder import SuggestionRewritePromptBuilder
 from app.resume_structure.parser import ResumeStructureParser
+from app.workflows.resume_analysis_workflow import ResumeAnalysisWorkflow
 from app.workflows.tailoring_suggestion_workflow import TailoringSuggestionWorkflow
 from tests.test_tailoring_suggestion_workflow import FakeGateway
 
@@ -87,7 +98,7 @@ async def api_client_factory():
     """Return a factory building a fresh `(client)` backed by a `FakeGateway` per test."""
     clients: list[AsyncClient] = []
 
-    async def _factory(responses: list) -> AsyncClient:
+    async def _factory(responses: list, reanalyze_responses: list | None = None) -> AsyncClient:
         settings = Settings(log_json=False, gemini_api_key="test-gemini-api-key")
         app = create_app(settings)
         gateway = FakeGateway(responses)
@@ -99,6 +110,15 @@ async def api_client_factory():
                 rewrite_prompt_builder=SuggestionRewritePromptBuilder(),
                 gateway=gateway,
             )
+        )
+        # `/reanalyze` runs a second, independent `ResumeAnalysisWorkflow`
+        # call (see `get_post_apply_analysis_workflow`) -- a separate
+        # `FakeGateway` so its programmed responses never collide with
+        # the suggestion-generation gateway's own queue.
+        reanalyze_gateway = FakeGateway(reanalyze_responses or [])
+        app.dependency_overrides[get_post_apply_analysis_workflow] = lambda: ResumeAnalysisWorkflow(
+            prompt_builder=ResumeAnalysisPromptBuilder(),
+            gateway=reanalyze_gateway,
         )
         transport = ASGITransport(app=app)
         client = AsyncClient(transport=transport, base_url="http://testserver")
@@ -457,3 +477,171 @@ async def test_custom_instructions_do_not_authorize_unsupported_facts(api_client
     )
 
     assert response.status_code == 502
+
+
+def _reanalysis_result(score: int) -> ResumeAnalysisResult:
+    return ResumeAnalysisResult(
+        overall_assessment=OverallAssessment(
+            overall_score=score,
+            hiring_recommendation=HiringRecommendation(decision="Proceed", reason="Solid fit."),
+            summary="Solid fit overall.",
+        ),
+        skill_matches=[
+            SkillMatch(
+                category="Backend", score=score, matched_skills=["Python"], missing_skills=[]
+            ),
+        ],
+        matching_projects=[],
+        strengths=["Strong backend ownership."],
+        weaknesses=[],
+        resume_improvements=[],
+    )
+
+
+async def _generate_and_apply(api_client_factory, *, reanalyze_responses: list | None = None):
+    """Generate a plan, apply its one suggestion, and return `(client, plan_id)`.
+
+    Shared setup for every `/reanalyze` test below -- `/reanalyze` only
+    makes sense against a plan that's already been generated (and
+    typically applied), same precondition the product flow enforces.
+    """
+    edits, text = _append_edit_and_text()
+    client = await api_client_factory([edits, text], reanalyze_responses=reanalyze_responses)
+    generate_response = await client.post("/v1/tailoring-suggestions", json=_generate_payload())
+    plan_id = generate_response.json()["plan_id"]
+    suggestion_id = generate_response.json()["suggestions"][0]["suggestion_id"]
+
+    await client.post(
+        f"/v1/tailoring-suggestions/{plan_id}/apply",
+        json={"selected_suggestion_ids": [suggestion_id], "edited_texts": {}},
+    )
+    return client, plan_id, suggestion_id
+
+
+async def test_reanalyze_returns_improved_when_score_increases(api_client_factory) -> None:
+    client, plan_id, suggestion_id = await _generate_and_apply(
+        api_client_factory, reanalyze_responses=[_reanalysis_result(81)]
+    )
+
+    response = await client.post(
+        f"/v1/tailoring-suggestions/{plan_id}/reanalyze",
+        json={
+            "previous_analysis": _ANALYSIS_PAYLOAD,
+            "selected_suggestion_ids": [suggestion_id],
+            "edited_texts": {},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    before_score = _ANALYSIS_PAYLOAD["overall_assessment"]["overall_score"]
+    assert body["comparison"]["score_before"] == before_score
+    assert body["comparison"]["score_after"] == 81
+    assert body["comparison"]["score_delta"] == 11
+    assert body["comparison"]["status"] == "improved"
+    assert body["after_analysis"]["overall_assessment"]["overall_score"] == 81
+
+
+async def test_reanalyze_returns_unchanged_when_score_is_equal(api_client_factory) -> None:
+    before_score = _ANALYSIS_PAYLOAD["overall_assessment"]["overall_score"]
+    client, plan_id, suggestion_id = await _generate_and_apply(
+        api_client_factory, reanalyze_responses=[_reanalysis_result(before_score)]
+    )
+
+    response = await client.post(
+        f"/v1/tailoring-suggestions/{plan_id}/reanalyze",
+        json={
+            "previous_analysis": _ANALYSIS_PAYLOAD,
+            "selected_suggestion_ids": [suggestion_id],
+            "edited_texts": {},
+        },
+    )
+
+    assert response.status_code == 200
+    comparison = response.json()["comparison"]
+    assert comparison["score_delta"] == 0
+    assert comparison["status"] == "unchanged"
+
+
+async def test_reanalyze_returns_decreased_when_score_drops(api_client_factory) -> None:
+    client, plan_id, suggestion_id = await _generate_and_apply(
+        api_client_factory, reanalyze_responses=[_reanalysis_result(60)]
+    )
+
+    response = await client.post(
+        f"/v1/tailoring-suggestions/{plan_id}/reanalyze",
+        json={
+            "previous_analysis": _ANALYSIS_PAYLOAD,
+            "selected_suggestion_ids": [suggestion_id],
+            "edited_texts": {},
+        },
+    )
+
+    assert response.status_code == 200
+    comparison = response.json()["comparison"]
+    before_score = _ANALYSIS_PAYLOAD["overall_assessment"]["overall_score"]
+    assert comparison["score_delta"] == 60 - before_score
+    assert comparison["status"] == "decreased"
+
+
+async def test_reanalyze_failure_does_not_fabricate_a_comparison(api_client_factory) -> None:
+    """No programmed reanalyze response -- the FakeGateway raises, simulating a real failure.
+
+    The endpoint must not swallow this into a fake "unchanged"/degraded
+    comparison -- the underlying failure propagates unchanged (exactly
+    like `/analyze` does on its own failure path -- see
+    `reanalyze_after_apply`'s docstring), never a 200 with an invented
+    score. No comparison/analysis is returned at all.
+    """
+    client, plan_id, suggestion_id = await _generate_and_apply(
+        api_client_factory, reanalyze_responses=[]
+    )
+
+    with pytest.raises(AssertionError, match="FakeGateway called more times"):
+        await client.post(
+            f"/v1/tailoring-suggestions/{plan_id}/reanalyze",
+            json={
+                "previous_analysis": _ANALYSIS_PAYLOAD,
+                "selected_suggestion_ids": [suggestion_id],
+                "edited_texts": {},
+            },
+        )
+
+
+async def test_reanalyze_unknown_plan_id_returns_404(api_client_factory) -> None:
+    client = await api_client_factory([])
+
+    response = await client.post(
+        "/v1/tailoring-suggestions/does-not-exist/reanalyze",
+        json={
+            "previous_analysis": _ANALYSIS_PAYLOAD,
+            "selected_suggestion_ids": [],
+            "edited_texts": {},
+        },
+    )
+
+    assert response.status_code == 404
+
+
+async def test_reanalyze_rejects_a_client_supplied_job_description(api_client_factory) -> None:
+    """The request schema has no job_description field at all -- extra="forbid" rejects one.
+
+    This is the enforcement mechanism behind this endpoint's core
+    invariant: the job description always comes from `StoredPlan`
+    (the one this plan was actually generated against), never from the
+    client, so a "before" and "after" comparison can never silently
+    drift onto different job descriptions.
+    """
+    client, plan_id, suggestion_id = await _generate_and_apply(api_client_factory)
+
+    response = await client.post(
+        f"/v1/tailoring-suggestions/{plan_id}/reanalyze",
+        json={
+            "previous_analysis": _ANALYSIS_PAYLOAD,
+            "selected_suggestion_ids": [suggestion_id],
+            "edited_texts": {},
+            "job_description": "A different job entirely.",
+        },
+    )
+
+    assert response.status_code == 422

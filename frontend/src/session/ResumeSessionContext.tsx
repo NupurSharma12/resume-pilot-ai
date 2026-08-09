@@ -8,13 +8,16 @@ import type {
   GenerateSuggestionsResponse,
   SourceFormat,
 } from '../data/tailoringSuggestionsTypes'
+import type { ResumeAnalysisComparison } from '../data/postApplyTypes'
 import {
+  normalizePostApplyAnalysisStatus,
   normalizeStatus,
   normalizeTailoringPlanStatus,
   RESUME_SESSION_VERSION,
   type AnalysisStatus,
   type CareerConversationStatus,
   type PersistedFinalTailoredResume,
+  type PostApplyAnalysisStatus,
   type ResumeSessionStorage,
   type TailoringPlanStatus,
 } from './resumeSessionTypes'
@@ -74,6 +77,18 @@ export interface ResumeSessionContextValue {
   tailoringSourceFormat: SourceFormat | null
   setTailoringSourceFormat: (format: SourceFormat | null) => void
 
+  // Post-Apply Analysis Loop (see docs/features/postapply-analysis-loop.md).
+  // `resumeAnalysis` above remains the "before" side of the comparison
+  // for the lifetime of the session -- none of this ever overwrites or
+  // clears it (see PostApplyComparisonCard for how a failed re-analysis
+  // is surfaced without ever fabricating a comparison).
+  postApplyAnalysis: ResumeAnalysisResult | null
+  setPostApplyAnalysis: (result: ResumeAnalysisResult | null) => void
+  postApplyComparison: ResumeAnalysisComparison | null
+  setPostApplyComparison: (comparison: ResumeAnalysisComparison | null) => void
+  postApplyAnalysisStatus: PostApplyAnalysisStatus
+  setPostApplyAnalysisStatus: (status: PostApplyAnalysisStatus) => void
+
   clearSession: () => void
 }
 
@@ -116,6 +131,12 @@ export function ResumeSessionProvider({
   >([])
   const [tailoringSourceFormat, setTailoringSourceFormat] = useState<SourceFormat | null>(null)
 
+  const [postApplyAnalysis, setPostApplyAnalysis] = useState<ResumeAnalysisResult | null>(null)
+  const [postApplyComparison, setPostApplyComparison] =
+    useState<ResumeAnalysisComparison | null>(null)
+  const [postApplyAnalysisStatus, setPostApplyAnalysisStatus] =
+    useState<PostApplyAnalysisStatus>('idle')
+
   // Reads storage exactly once. Guarded with a ref (not just an empty
   // dependency array) so React 18 StrictMode's dev-only double effect
   // invocation can't apply a stale second `storage.load()` result on top --
@@ -145,6 +166,9 @@ export function ResumeSessionProvider({
       setTailoringValidationReport(persisted.tailoringValidationReport)
       setTailoringAvailableExportFormats(persisted.tailoringAvailableExportFormats)
       setTailoringSourceFormat(persisted.tailoringSourceFormat)
+      setPostApplyAnalysis(persisted.postApplyAnalysis)
+      setPostApplyComparison(persisted.postApplyComparison)
+      setPostApplyAnalysisStatus(persisted.postApplyAnalysisStatus)
     }
     setHydrationStatus('hydrated')
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -173,6 +197,9 @@ export function ResumeSessionProvider({
       tailoringValidationReport,
       tailoringAvailableExportFormats,
       tailoringSourceFormat,
+      postApplyAnalysis,
+      postApplyComparison,
+      postApplyAnalysisStatus: normalizePostApplyAnalysisStatus(postApplyAnalysisStatus),
     })
   }, [
     hydrationStatus,
@@ -191,6 +218,9 @@ export function ResumeSessionProvider({
     tailoringValidationReport,
     tailoringAvailableExportFormats,
     tailoringSourceFormat,
+    postApplyAnalysis,
+    postApplyComparison,
+    postApplyAnalysisStatus,
     storage,
   ])
 
@@ -210,6 +240,9 @@ export function ResumeSessionProvider({
     setTailoringValidationReport(null)
     setTailoringAvailableExportFormats([])
     setTailoringSourceFormat(null)
+    setPostApplyAnalysis(null)
+    setPostApplyComparison(null)
+    setPostApplyAnalysisStatus('idle')
     storage.clear()
   }
 
@@ -245,6 +278,12 @@ export function ResumeSessionProvider({
     setTailoringAvailableExportFormats,
     tailoringSourceFormat,
     setTailoringSourceFormat,
+    postApplyAnalysis,
+    setPostApplyAnalysis,
+    postApplyComparison,
+    setPostApplyComparison,
+    postApplyAnalysisStatus,
+    setPostApplyAnalysisStatus,
     clearSession,
   }
 

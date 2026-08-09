@@ -71,6 +71,10 @@ function isSupportedPersistedSession(value: unknown): value is PersistedResumeSe
   ) {
     return false
   }
+  if (!('postApplyAnalysis' in value) || !('postApplyComparison' in value)) return false
+  if (value.postApplyAnalysisStatus !== 'idle' && value.postApplyAnalysisStatus !== 'error') {
+    return false
+  }
   return true
 }
 

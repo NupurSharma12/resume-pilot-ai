@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
-import { CheckSquare, RotateCw, Square, Wand2 } from 'lucide-react'
+import { BarChart2, CheckSquare, RotateCw, Square, Wand2 } from 'lucide-react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import TopHeader from '../components/TopHeader'
 import Button from '../components/Button'
@@ -10,6 +10,7 @@ import TailoringPlanSummaryHeader from '../components/TailoringPlanSummaryHeader
 import TailoringFinalResumeCard from '../components/TailoringFinalResumeCard'
 import TailoringDownloadPanel from '../components/TailoringDownloadPanel'
 import TailoringPreviewPanel from '../components/TailoringPreviewPanel'
+import PostApplyComparisonCard from '../components/PostApplyComparisonCard'
 import { getCareerConversation } from '../lib/careerConversationApi'
 import {
   buildConflictSummaries,
@@ -24,6 +25,7 @@ import {
   exportTailoredResume,
   generateTailoringSuggestions,
 } from '../lib/tailoringSuggestionsApi'
+import { reanalyzeAfterApply } from '../lib/postApplyApi'
 import { ApiError } from '../lib/api'
 import { candidateFilenameBase, detectSourceFormatFromFilename } from '../lib/sourceFormat'
 import { useResumeSession } from '../session/ResumeSessionContext'
@@ -77,6 +79,11 @@ export default function TailoredResumePage() {
     setTailoringAvailableExportFormats,
     tailoringSourceFormat,
     setTailoringSourceFormat,
+    postApplyComparison,
+    setPostApplyAnalysis,
+    setPostApplyComparison,
+    postApplyAnalysisStatus,
+    setPostApplyAnalysisStatus,
   } = useResumeSession()
 
   const [generateError, setGenerateError] = useState('')
@@ -85,6 +92,7 @@ export default function TailoredResumePage() {
   const [revalidationErrors, setRevalidationErrors] = useState<Record<string, string>>({})
   const [exportingFormat, setExportingFormat] = useState<ExportFormat | null>(null)
   const [exportError, setExportError] = useState('')
+  const [reanalyzeError, setReanalyzeError] = useState('')
   // Stale-plan recovery (see `recoverFromStalePlan`) is deliberately
   // page-local, transient UI state -- never persisted through
   // ResumeSessionProvider. It only ever describes "what this page is
@@ -133,6 +141,7 @@ export default function TailoredResumePage() {
   // effect of navigating here, of refreshing, or of no plan existing yet.
   const isGeneratingRef = useRef(false)
   const isApplyingRef = useRef(false)
+  const isReanalyzingRef = useRef(false)
 
   function closePreview() {
     setIsPreviewOpen(false)
@@ -174,6 +183,14 @@ export default function TailoredResumePage() {
       setTailoringSourceFormat(detectSourceFormatFromFilename(resume.fileName))
       setIsPreviewOpen(false)
       setPreviewResult(null)
+      // A fresh plan means a fresh final resume (or none, until applied
+      // again) -- any prior post-apply comparison was measuring the
+      // *previous* plan's applied resume and no longer describes
+      // anything real.
+      setPostApplyAnalysis(null)
+      setPostApplyComparison(null)
+      setPostApplyAnalysisStatus('idle')
+      setReanalyzeError('')
     } catch (err) {
       setGenerateError(
         err instanceof ApiError ? err.message : 'An unexpected error occurred. Please try again.',
@@ -195,6 +212,9 @@ export default function TailoredResumePage() {
     setFinalTailoredResume,
     setTailoringValidationReport,
     setTailoringAvailableExportFormats,
+    setPostApplyAnalysis,
+    setPostApplyComparison,
+    setPostApplyAnalysisStatus,
     setTailoringSourceFormat,
   ])
 
@@ -429,6 +449,56 @@ export default function TailoredResumePage() {
     },
     [tailoringPlan, tailoringSelections, tailoringEditedTexts, resume],
   )
+
+  // The Post-Apply Analysis Loop (see
+  // docs/features/postapply-analysis-loop.md): re-analyzes the resume
+  // that the current selection/edits would produce against the same job
+  // description the plan was generated against (the backend re-derives
+  // both server-side -- see reanalyzeAfterApply's docs), and
+  // deterministically compares it against `resumeAnalysis`, the
+  // original analysis, which this never overwrites. Mirrors
+  // handleDownload's own choice to use the *current* tailoringSelections/
+  // tailoringEditedTexts rather than only `finalTailoredResume`'s
+  // last-applied snapshot, for the same reason: both describe "what the
+  // review stage is configured to produce right now."
+  //
+  // On failure, only `reanalyzeError`/`postApplyAnalysisStatus` change --
+  // `postApplyComparison` is never cleared or fabricated, so the last
+  // real comparison (if any) stays visible exactly like a failed
+  // export/apply never clears its own last good result.
+  const handleReanalyze = useCallback(async () => {
+    if (!tailoringPlan || !resumeAnalysis) return
+    if (isReanalyzingRef.current) return
+    isReanalyzingRef.current = true
+    setPostApplyAnalysisStatus('reanalyzing')
+    setReanalyzeError('')
+    try {
+      const result = await reanalyzeAfterApply(
+        tailoringPlan.plan_id,
+        resumeAnalysis,
+        tailoringSelections,
+        tailoringEditedTexts,
+      )
+      setPostApplyAnalysis(result.after_analysis)
+      setPostApplyComparison(result.comparison)
+      setPostApplyAnalysisStatus('idle')
+    } catch (err) {
+      setReanalyzeError(
+        err instanceof ApiError ? err.message : 'An unexpected error occurred. Please try again.',
+      )
+      setPostApplyAnalysisStatus('error')
+    } finally {
+      isReanalyzingRef.current = false
+    }
+  }, [
+    tailoringPlan,
+    resumeAnalysis,
+    tailoringSelections,
+    tailoringEditedTexts,
+    setPostApplyAnalysis,
+    setPostApplyComparison,
+    setPostApplyAnalysisStatus,
+  ])
 
   const selectedCount = tailoringSelections.length
   const totalCount = tailoringPlan?.suggestions.length ?? 0
@@ -723,6 +793,41 @@ export default function TailoredResumePage() {
                         exportError={exportError || null}
                         onDownload={handleDownload}
                       />
+                    )}
+
+                    {/* Stage 5: Post-Apply Analysis Loop -- see
+                        docs/features/postapply-analysis-loop.md. */}
+                    <div className="rounded-2xl border border-gray-200 bg-white p-6">
+                      <div className="flex flex-wrap items-center justify-between gap-4">
+                        <div>
+                          <h3 className="font-semibold text-gray-900">How much did this help?</h3>
+                          <p className="mt-1 text-sm text-gray-500">
+                            Re-analyze your updated resume against the same job description to see
+                            whether the applied changes actually improved your match.
+                          </p>
+                        </div>
+                        <Button
+                          variant="outline"
+                          icon={<BarChart2 size={16} />}
+                          disabled={postApplyAnalysisStatus === 'reanalyzing'}
+                          onClick={handleReanalyze}
+                        >
+                          {postApplyAnalysisStatus === 'reanalyzing'
+                            ? 'Re-analyzing…'
+                            : 'Re-analyze & Compare'}
+                        </Button>
+                      </div>
+                      {postApplyAnalysisStatus === 'error' && reanalyzeError && (
+                        <div className="mt-4 rounded-xl border border-amber-100 bg-amber-50/60 p-4">
+                          <p className="text-sm text-amber-700">
+                            Your resume changes were applied successfully, but re-analysis could
+                            not be completed, so improvement could not be measured: {reanalyzeError}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                    {postApplyComparison && (
+                      <PostApplyComparisonCard comparison={postApplyComparison} />
                     )}
                   </>
                 )}
