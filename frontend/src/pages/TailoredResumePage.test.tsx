@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes, Outlet } from 'react-router-dom'
 import TailoredResumePage from './TailoredResumePage'
 import * as careerConversationApi from '../lib/careerConversationApi'
 import * as tailoringSuggestionsApi from '../lib/tailoringSuggestionsApi'
+import * as postApplyApi from '../lib/postApplyApi'
 import * as resumeSessionContext from '../session/ResumeSessionContext'
 import { ResumeSessionProvider } from '../session/ResumeSessionContext'
 import { ApiError } from '../lib/api'
@@ -25,6 +26,7 @@ import type { PersistedResumeSession, ResumeSessionStorage } from '../session/re
 
 vi.mock('../lib/careerConversationApi')
 vi.mock('../lib/tailoringSuggestionsApi')
+vi.mock('../lib/postApplyApi')
 vi.mock('../session/ResumeSessionContext', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../session/ResumeSessionContext')>()
   // Defaults to the *real* hook (reading from the real `ResumeSessionProvider`),
@@ -37,6 +39,7 @@ vi.mock('../session/ResumeSessionContext', async (importOriginal) => {
 
 const mockedCareerConversationApi = vi.mocked(careerConversationApi)
 const mockedTailoringApi = vi.mocked(tailoringSuggestionsApi)
+const mockedPostApplyApi = vi.mocked(postApplyApi)
 const mockedUseResumeSession = vi.mocked(resumeSessionContext.useResumeSession)
 
 function makeResumeSessionValue(
@@ -74,6 +77,12 @@ function makeResumeSessionValue(
     setTailoringAvailableExportFormats: vi.fn(),
     tailoringSourceFormat: null,
     setTailoringSourceFormat: vi.fn(),
+    postApplyAnalysis: null,
+    setPostApplyAnalysis: vi.fn(),
+    postApplyComparison: null,
+    setPostApplyComparison: vi.fn(),
+    postApplyAnalysisStatus: 'idle',
+    setPostApplyAnalysisStatus: vi.fn(),
     clearSession: vi.fn(),
     ...overrides,
   }
@@ -1074,6 +1083,133 @@ describe('TailoredResumePage: download options', () => {
     fireEvent.click(screen.getByRole('button', { name: /^download txt$/i }))
 
     await waitFor(() => expect(mockedTailoringApi.downloadExportedFile).toHaveBeenCalled())
+  })
+})
+
+describe('TailoredResumePage: Post-Apply Analysis Loop', () => {
+  function renderApplied(overrides: Partial<PersistedResumeSession> = {}) {
+    return renderPageWithRealSession({
+      tailoringPlan: fixtureGenerateSuggestionsResponse,
+      tailoringSelections: ['suggestion-0'],
+      tailoringAvailableExportFormats: fixtureGenerateSuggestionsResponse.available_export_formats,
+      finalTailoredResume: {
+        finalResumeText: fixtureApplySuggestionsResponse.final_resume_text,
+        appliedSuggestionIds: fixtureApplySuggestionsResponse.applied_suggestion_ids,
+      },
+      tailoringValidationReport: fixtureApplySuggestionsResponse.final_validation,
+      ...overrides,
+    })
+  }
+
+  it('does not call reanalyze on its own -- only from the explicit button', () => {
+    renderApplied()
+    expect(mockedPostApplyApi.reanalyzeAfterApply).not.toHaveBeenCalled()
+  })
+
+  it('shows the improved outcome honestly, with the score delta', async () => {
+    mockedPostApplyApi.reanalyzeAfterApply.mockResolvedValue({
+      after_analysis: fixtureResumeAnalysis,
+      comparison: {
+        score_before: 72,
+        score_after: 81,
+        score_delta: 9,
+        status: 'improved',
+        category_comparisons: [],
+        strengths_gained: [],
+        strengths_lost: [],
+        weaknesses_resolved: [],
+        weaknesses_remaining: [],
+        new_weaknesses: [],
+      },
+    })
+    renderApplied()
+
+    fireEvent.click(screen.getByRole('button', { name: /re-analyze & compare/i }))
+
+    await waitFor(() => expect(screen.getByText(/improved by 9 points/i)).toBeInTheDocument())
+    expect(mockedPostApplyApi.reanalyzeAfterApply).toHaveBeenCalledWith(
+      fixtureGenerateSuggestionsResponse.plan_id,
+      fixtureResumeAnalysis,
+      ['suggestion-0'],
+      {},
+    )
+  })
+
+  it('never presents an unchanged score as a success', async () => {
+    mockedPostApplyApi.reanalyzeAfterApply.mockResolvedValue({
+      after_analysis: fixtureResumeAnalysis,
+      comparison: {
+        score_before: 78,
+        score_after: 78,
+        score_delta: 0,
+        status: 'unchanged',
+        category_comparisons: [],
+        strengths_gained: [],
+        strengths_lost: [],
+        weaknesses_resolved: [],
+        weaknesses_remaining: [],
+        new_weaknesses: [],
+      },
+    })
+    renderApplied()
+
+    fireEvent.click(screen.getByRole('button', { name: /re-analyze & compare/i }))
+
+    await waitFor(() => expect(screen.getByText(/did not improve/i)).toBeInTheDocument())
+  })
+
+  it('never hides a decreased score, and reports a re-analysis failure without fabricating a comparison', async () => {
+    mockedPostApplyApi.reanalyzeAfterApply.mockRejectedValue(
+      new ApiError('Could not reach the re-analysis service.'),
+    )
+    renderApplied()
+
+    fireEvent.click(screen.getByRole('button', { name: /re-analyze & compare/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText(/re-analysis could not be completed/i)).toBeInTheDocument(),
+    )
+    // No fabricated comparison of any kind is shown.
+    expect(screen.queryByText(/improved by/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/decreased by/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/did not improve/i)).not.toBeInTheDocument()
+    // The applied resume itself is unaffected by the failure.
+    expect(
+      screen.getByText(
+        (_, el) => el?.tagName === 'PRE' && el.textContent === fixtureApplySuggestionsResponse.final_resume_text,
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('a later successful re-analyze after a failure clears the failure message', async () => {
+    mockedPostApplyApi.reanalyzeAfterApply.mockRejectedValueOnce(
+      new ApiError('Could not reach the re-analysis service.'),
+    )
+    renderApplied()
+    fireEvent.click(screen.getByRole('button', { name: /re-analyze & compare/i }))
+    await waitFor(() =>
+      expect(screen.getByText(/re-analysis could not be completed/i)).toBeInTheDocument(),
+    )
+
+    mockedPostApplyApi.reanalyzeAfterApply.mockResolvedValueOnce({
+      after_analysis: fixtureResumeAnalysis,
+      comparison: {
+        score_before: 78,
+        score_after: 74,
+        score_delta: -4,
+        status: 'decreased',
+        category_comparisons: [],
+        strengths_gained: [],
+        strengths_lost: [],
+        weaknesses_resolved: [],
+        weaknesses_remaining: [],
+        new_weaknesses: [],
+      },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /re-analyze & compare/i }))
+
+    await waitFor(() => expect(screen.getByText(/decreased by 4 points/i)).toBeInTheDocument())
+    expect(screen.queryByText(/re-analysis could not be completed/i)).not.toBeInTheDocument()
   })
 })
 

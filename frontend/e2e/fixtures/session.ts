@@ -15,7 +15,11 @@ import type {
 import type { PersistedResumeSession } from '../../src/session/resumeSessionTypes'
 
 const STORAGE_KEY = 'resumepilot.resumeSession.v1'
-const RESUME_SESSION_VERSION = 3 as const
+// Must match resumeSessionTypes.ts's RESUME_SESSION_VERSION exactly -- a
+// mismatch here doesn't fail loudly, it just makes
+// isSupportedPersistedSession discard this seeded session as an
+// unsupported version, the same as a stale session from a prior build.
+const RESUME_SESSION_VERSION = 4 as const
 
 export const SAMPLE_RESUME_TEXT = [
   'SUMMARY',
@@ -133,6 +137,9 @@ function basePersistedSession(): PersistedResumeSession {
     tailoringValidationReport: null,
     tailoringAvailableExportFormats: fixtureTailoringPlan.available_export_formats,
     tailoringSourceFormat: 'plain_text',
+    postApplyAnalysis: null,
+    postApplyComparison: null,
+    postApplyAnalysisStatus: 'idle',
   }
 }
 

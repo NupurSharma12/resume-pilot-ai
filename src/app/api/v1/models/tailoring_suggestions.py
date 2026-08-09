@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.api.v1.models.analyze_resume import AnalyzeResumeResponse
 from app.api.v1.models.career_conversation import ConversationSessionResponse
 from app.export.models import ExportFormat
+from app.models.analysis_comparison import ComparisonStatus
 from app.models.tailoring_suggestions import SuggestionOperation, SuggestionValidationStatus
 
 
@@ -196,4 +197,95 @@ class ExportResumeRequest(BaseModel):
             "the candidate's name and target role. Sanitized server-side before use; the "
             "file extension is always derived from format, never taken from this value."
         ),
+    )
+
+
+class ReanalyzeRequest(BaseModel):
+    """Request body for `POST /v1/tailoring-suggestions/{plan_id}/reanalyze`.
+
+    Deliberately does NOT include a `job_description` -- the endpoint uses
+    the one `plan_id` was originally generated against (stored on
+    `StoredPlan`), never a client-supplied one, so a "before" and "after"
+    comparison can never silently drift onto different job descriptions.
+    Otherwise mirrors `ApplySuggestionsRequest`/`ExportResumeRequest`: the
+    final resume being re-analyzed is re-derived server-side from the
+    trusted plan via the same `SuggestionApplier`, not trusted from the
+    client.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    previous_analysis: AnalyzeResumeResponse = Field(
+        description=(
+            "The 'before' analysis to compare against -- exactly as returned by the "
+            "original POST /v1/analyze (or a prior /reanalyze's 'after'). Echoed back by "
+            "the client rather than stored server-side, the same stateless-backend "
+            "pattern GenerateSuggestionsRequest.resume_analysis already uses."
+        )
+    )
+    selected_suggestion_ids: list[str] = Field(
+        description="Which suggestions (by id, from this plan) the user approved."
+    )
+    edited_texts: dict[str, str] = Field(
+        default_factory=dict, description="User-edited replacement text, keyed by suggestion_id."
+    )
+
+
+class SkillCategoryComparisonResponse(BaseModel):
+    """Before/after comparison for one skill category present in both analyses."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    category: str = Field(description="The skill category being compared.")
+    score_before: int = Field(description="This category's fit score before applying changes.")
+    score_after: int = Field(description="This category's fit score after applying changes.")
+    score_delta: int = Field(description="score_after - score_before.")
+    status: ComparisonStatus = Field(description="Deterministic verdict for this category alone.")
+    newly_matched_skills: list[str] = Field(
+        description="Skills matched after, but not before -- evidence of real improvement."
+    )
+    newly_missing_skills: list[str] = Field(
+        description="Skills matched before but missing after -- a regression signal."
+    )
+
+
+class ResumeAnalysisComparisonResponse(BaseModel):
+    """The full, honest before/after comparison of a resume against one job description."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    score_before: int = Field(description="Overall fit score before applying changes.")
+    score_after: int = Field(description="Overall fit score after applying changes.")
+    score_delta: int = Field(description="score_after - score_before.")
+    status: ComparisonStatus = Field(
+        description="improved iff score_after > score_before; decreased iff <; unchanged iff ==."
+    )
+    category_comparisons: list[SkillCategoryComparisonResponse] = Field(
+        description="Per-category comparisons, for every category present in both analyses."
+    )
+    strengths_gained: list[str] = Field(description="Strengths present after, but not before.")
+    strengths_lost: list[str] = Field(
+        description="Strengths present before, but no longer present after -- a regression signal."
+    )
+    weaknesses_resolved: list[str] = Field(
+        description="Weaknesses present before that no longer appear after."
+    )
+    weaknesses_remaining: list[str] = Field(
+        description="Weaknesses present in both before and after -- still unaddressed."
+    )
+    new_weaknesses: list[str] = Field(
+        description="Weaknesses present after, but not before -- a regression signal."
+    )
+
+
+class ReanalyzeResponse(BaseModel):
+    """Response body for `POST /v1/tailoring-suggestions/{plan_id}/reanalyze`."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    after_analysis: AnalyzeResumeResponse = Field(
+        description="The full re-analysis of the applied resume against the plan's job description."
+    )
+    comparison: ResumeAnalysisComparisonResponse = Field(
+        description="Deterministic before/after comparison -- see app.analysis.comparison."
     )

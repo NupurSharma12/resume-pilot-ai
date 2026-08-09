@@ -48,6 +48,12 @@ function makeResumeSessionValue(
     setTailoringAvailableExportFormats: vi.fn(),
     tailoringSourceFormat: null,
     setTailoringSourceFormat: vi.fn(),
+    postApplyAnalysis: null,
+    setPostApplyAnalysis: vi.fn(),
+    postApplyComparison: null,
+    setPostApplyComparison: vi.fn(),
+    postApplyAnalysisStatus: 'idle',
+    setPostApplyAnalysisStatus: vi.fn(),
     clearSession: vi.fn(),
     ...overrides,
   }

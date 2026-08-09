@@ -23,6 +23,15 @@ asking the apply endpoint to resend the resume, job description, and
 conversation history just to reconstruct it, and avoids re-parsing the
 resume text a second time in a way that could ever drift from the first.
 
+`job_description` is stored for the same reason: the post-apply
+re-analysis endpoint (`POST .../reanalyze`, see
+`docs/features/postapply-analysis-loop.md`) must compare the resume
+against the *same* job description this plan was generated against, not
+whatever a client happens to send at reanalyze time — a client-supplied
+job description would let the "before" and "after" halves of a
+comparison silently diverge. This is the one piece of that endpoint's
+required context this store didn't already carry.
+
 Everything here is `frozen=True` — nothing mutates a stored plan in
 place, only stores a new one (`save`) or reads one back (`get`). No
 expiry, no persistence, no cross-process sharing: plans live only in
@@ -46,6 +55,7 @@ class StoredPlan:
     plan: SuggestionPlan
     structured_resume: StructuredResume
     evidence_store: EvidenceStore
+    job_description: str
 
 
 class TailoringPlanStore:

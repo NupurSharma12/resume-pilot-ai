@@ -7,6 +7,7 @@ import type {
   GenerateSuggestionsResponse,
   SourceFormat,
 } from '../data/tailoringSuggestionsTypes'
+import type { ResumeAnalysisComparison } from '../data/postApplyTypes'
 
 export type AnalysisStatus = 'idle' | 'loading' | 'success' | 'error'
 
@@ -34,16 +35,24 @@ export type CareerConversationStatus = 'in_progress' | 'complete'
 export type TailoringPlanStatus = 'idle' | 'generating' | 'error'
 export type PersistedTailoringPlanStatus = 'idle' | 'error'
 
-// Bumped from 1: `TailoringSuggestion` gained a required `conflicts_with`
-// field (see docs/features/interactive-tailored-resume.md's atomic-
-// suggestions section) that a session persisted by a prior build's
-// `tailoringPlan.suggestions` won't carry. `tailoringPlan`'s own content
-// is deliberately never deep-validated below (see
-// `isSupportedPersistedSession`'s docstring in resumeSessionStorage.ts),
-// so an un-bumped version here would have let that stale plan rehydrate
-// and crash the page the moment anything read `.conflicts_with` off an
-// old suggestion.
-export const RESUME_SESSION_VERSION = 3 as const
+// Same 'loading' vs persisted-status split as AnalysisStatus/
+// TailoringPlanStatus above, for the same reason: re-analysis cannot
+// still be in flight after a reload. 'error' means the last re-analysis
+// attempt failed to complete -- distinct from `postApplyComparison`
+// being null, which just means no re-analysis has ever succeeded yet
+// (see PostApplyComparisonCard's docs on why a failure must never be
+// presented as a comparison result).
+export type PostApplyAnalysisStatus = 'idle' | 'reanalyzing' | 'error'
+export type PersistedPostApplyAnalysisStatus = 'idle' | 'error'
+
+// Bumped from 3: adds the Post-Apply Analysis Loop's `postApplyAnalysis`/
+// `postApplyComparison`/`postApplyAnalysisStatus` fields (see
+// docs/features/postapply-analysis-loop.md). Same reasoning as the
+// previous bump (2 -> 3): a session persisted by a prior build never had
+// these fields at all, so it must fail `isSupportedPersistedSession` and
+// be discarded rather than partially rehydrating into a shape this
+// version doesn't expect.
+export const RESUME_SESSION_VERSION = 4 as const
 
 // A compact record of the last successfully applied final resume —
 // deliberately just the rendered text and which suggestions produced it,
@@ -83,6 +92,13 @@ export interface PersistedResumeSession {
   tailoringValidationReport: FinalValidationReport | null
   tailoringAvailableExportFormats: ExportFormat[]
   tailoringSourceFormat: SourceFormat | null
+  // Post-Apply Analysis Loop state (see docs/features/postapply-analysis-loop.md).
+  // `resumeAnalysis` above is deliberately never overwritten or cleared by
+  // any of this -- it stays the "before" side of the comparison for the
+  // lifetime of the session, exactly as the feature requires.
+  postApplyAnalysis: ResumeAnalysisResult | null
+  postApplyComparison: ResumeAnalysisComparison | null
+  postApplyAnalysisStatus: PersistedPostApplyAnalysisStatus
 }
 
 // Small and framework-independent on purpose: today's implementation reads
@@ -104,4 +120,10 @@ export function normalizeTailoringPlanStatus(
   status: TailoringPlanStatus,
 ): PersistedTailoringPlanStatus {
   return status === 'generating' ? 'idle' : status
+}
+
+export function normalizePostApplyAnalysisStatus(
+  status: PostApplyAnalysisStatus,
+): PersistedPostApplyAnalysisStatus {
+  return status === 'reanalyzing' ? 'idle' : status
 }

@@ -132,4 +132,47 @@ describe('sessionStorageResumeSessionStorage', () => {
     )
     expect(sessionStorageResumeSessionStorage.load()).toBeNull()
   })
+
+  it('discards a payload from a version predating the Post-Apply Analysis Loop fields', () => {
+    // A session persisted by the prior build (version 3): no
+    // postApplyAnalysis/postApplyComparison/postApplyAnalysisStatus keys
+    // at all -- must be discarded, not partially rehydrated.
+    const preLoopSession = { ...fixturePersistedSession(), version: 3 } as Record<string, unknown>
+    delete preLoopSession.postApplyAnalysis
+    delete preLoopSession.postApplyComparison
+    delete preLoopSession.postApplyAnalysisStatus
+    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(preLoopSession))
+
+    expect(sessionStorageResumeSessionStorage.load()).toBeNull()
+    expect(window.sessionStorage.getItem(STORAGE_KEY)).toBeNull()
+  })
+
+  it('discards a payload with an invalid postApplyAnalysisStatus enum', () => {
+    window.sessionStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ ...fixturePersistedSession(), postApplyAnalysisStatus: 'reanalyzing' }),
+    )
+    expect(sessionStorageResumeSessionStorage.load()).toBeNull()
+  })
+
+  it('round-trips a session carrying a post-apply comparison', () => {
+    const session = fixturePersistedSession({
+      postApplyAnalysis: null,
+      postApplyComparison: {
+        score_before: 70,
+        score_after: 80,
+        score_delta: 10,
+        status: 'improved',
+        category_comparisons: [],
+        strengths_gained: ['Demonstrated frontend work.'],
+        strengths_lost: [],
+        weaknesses_resolved: [],
+        weaknesses_remaining: [],
+        new_weaknesses: [],
+      },
+      postApplyAnalysisStatus: 'idle',
+    })
+    sessionStorageResumeSessionStorage.save(session)
+    expect(sessionStorageResumeSessionStorage.load()).toEqual(session)
+  })
 })

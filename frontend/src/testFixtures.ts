@@ -130,6 +130,9 @@ export function fixturePersistedSession(
     tailoringValidationReport: null,
     tailoringAvailableExportFormats: [],
     tailoringSourceFormat: null,
+    postApplyAnalysis: null,
+    postApplyComparison: null,
+    postApplyAnalysisStatus: 'idle',
     ...overrides,
   }
 }

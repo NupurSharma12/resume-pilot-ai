@@ -1,6 +1,6 @@
 """Interactive Tailoring endpoints: `/v1/tailoring-suggestions*`.
 
-Three endpoints, matching the product's own three-stage split:
+Four endpoints, matching the product's own stage split:
 
 - `POST /tailoring-suggestions` -- generate a `SuggestionPlan` (Stages 1-4
   of `TailoringSuggestionWorkflow`), stored server-side under a `plan_id`.
@@ -12,6 +12,13 @@ Three endpoints, matching the product's own three-stage split:
   final resume (by re-running the applier against the same trusted plan)
   and render it as a downloadable file (`ExportService`). Returns a raw
   file body, not JSON.
+- `POST /tailoring-suggestions/{plan_id}/reanalyze` -- the Post-Apply
+  Analysis Loop (see `docs/features/postapply-analysis-loop.md`):
+  re-derives the same final resume `/apply`/`/export` would, re-runs the
+  *existing* `ResumeAnalysisWorkflow` against it and the plan's own
+  stored job description, and deterministically compares the result
+  against a client-echoed "before" analysis (`app.analysis.comparison`).
+  No LLM ever decides whether the score improved.
 
 Wires HTTP requests to the injected workflow/store/applier/export
 collaborators and back, exactly as `tailor_resume.py` (the superseded
@@ -27,7 +34,15 @@ import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from app.api.v1.models.analyze_resume import AnalyzeResumeResponse
+from app.analysis.comparison import compute_resume_analysis_comparison
+from app.api.v1.models.analyze_resume import (
+    AnalyzeResumeResponse,
+    HiringRecommendationResponse,
+    MatchingProjectResponse,
+    OverallAssessmentResponse,
+    ResumeImprovementResponse,
+    SkillMatchResponse,
+)
 from app.api.v1.models.career_conversation import ConversationSessionResponse
 from app.api.v1.models.tailoring_suggestions import (
     ApplySuggestionsRequest,
@@ -36,6 +51,10 @@ from app.api.v1.models.tailoring_suggestions import (
     FinalValidationResponse,
     GenerateSuggestionsRequest,
     GenerateSuggestionsResponse,
+    ReanalyzeRequest,
+    ReanalyzeResponse,
+    ResumeAnalysisComparisonResponse,
+    SkillCategoryComparisonResponse,
     SuggestionResponse,
 )
 from app.core.config import Settings, get_settings
@@ -44,6 +63,7 @@ from app.evidence.evidence_store_builder import EvidenceStoreBuilder
 from app.export.models import ExportFormat
 from app.export.service import ORIGINAL_FORMAT_EXPORT, ExportService, detect_source_format
 from app.gateways.llm.factory import build_llm_gateway
+from app.models.analysis_comparison import ResumeAnalysisComparison
 from app.models.career_conversation import ConversationExchange
 from app.models.resume_analysis import (
     HiringRecommendation,
@@ -54,6 +74,7 @@ from app.models.resume_analysis import (
     SkillMatch,
 )
 from app.models.tailoring_suggestions import TailoringSuggestion
+from app.prompts.resume_analysis_prompt_builder import ResumeAnalysisPromptBuilder
 from app.prompts.suggestion_planner_prompt_builder import SuggestionPlannerPromptBuilder
 from app.prompts.suggestion_rewrite_prompt_builder import SuggestionRewritePromptBuilder
 from app.resume_structure.parser import ResumeStructureParser
@@ -65,6 +86,7 @@ from app.tailoring.applier import (
     SuggestionRevalidationFailedError,
     UnknownSuggestionIdError,
 )
+from app.workflows.resume_analysis_workflow import ResumeAnalysisWorkflow
 from app.workflows.tailoring_suggestion_workflow import (
     SuggestionPlanInvalidError,
     TailoringSuggestionWorkflow,
@@ -116,6 +138,26 @@ def get_export_service() -> ExportService:
     return ExportService()
 
 
+def get_post_apply_analysis_workflow(
+    settings: Settings = Depends(get_settings),
+) -> ResumeAnalysisWorkflow:
+    """Construct a `ResumeAnalysisWorkflow` for `/reanalyze`, wired identically to `/analyze`.
+
+    A separate provider from `analyze.py`'s own `get_resume_analysis_workflow`
+    (same construction, different function) -- matching this codebase's
+    established per-endpoint independence (see `_to_domain_analysis`'s
+    docstring) rather than importing across endpoint modules. Reuses the
+    exact same `ResumeAnalysisWorkflow`/`ResumeAnalysisPromptBuilder`/
+    `build_llm_gateway` the original analysis already runs through, so a
+    post-apply re-analysis is scored by the identical pipeline the
+    "before" analysis was.
+    """
+    return ResumeAnalysisWorkflow(
+        prompt_builder=ResumeAnalysisPromptBuilder(),
+        gateway=build_llm_gateway(settings),
+    )
+
+
 def _to_domain_analysis(response: AnalyzeResumeResponse) -> ResumeAnalysisResult:
     """Map the API's `AnalyzeResumeResponse` onto the domain `ResumeAnalysisResult`.
 
@@ -163,6 +205,84 @@ def _to_domain_analysis(response: AnalyzeResumeResponse) -> ResumeAnalysisResult
     )
 
 
+def _to_analysis_response(result: ResumeAnalysisResult) -> AnalyzeResumeResponse:
+    """Map the domain `ResumeAnalysisResult` onto the API's `AnalyzeResumeResponse`.
+
+    The inverse of `_to_domain_analysis`, needed here because
+    `/reanalyze` produces a fresh domain result (via
+    `ResumeAnalysisWorkflow.analyze`) that must go back out over HTTP the
+    same shape `/analyze` itself returns. Written out field by field for
+    the same reason `analyze.py`'s own endpoint does it inline -- the API
+    schema and domain model are only coincidentally identical right now.
+    """
+    return AnalyzeResumeResponse(
+        overall_assessment=OverallAssessmentResponse(
+            overall_score=result.overall_assessment.overall_score,
+            hiring_recommendation=HiringRecommendationResponse(
+                decision=result.overall_assessment.hiring_recommendation.decision,
+                reason=result.overall_assessment.hiring_recommendation.reason,
+            ),
+            summary=result.overall_assessment.summary,
+        ),
+        skill_matches=[
+            SkillMatchResponse(
+                category=skill_match.category,
+                score=skill_match.score,
+                matched_skills=skill_match.matched_skills,
+                missing_skills=skill_match.missing_skills,
+            )
+            for skill_match in result.skill_matches
+        ],
+        matching_projects=[
+            MatchingProjectResponse(
+                title=matching_project.title,
+                relevance_score=matching_project.relevance_score,
+                reason=matching_project.reason,
+            )
+            for matching_project in result.matching_projects
+        ],
+        strengths=result.strengths,
+        weaknesses=result.weaknesses,
+        resume_improvements=[
+            ResumeImprovementResponse(
+                section=resume_improvement.section,
+                recommendation=resume_improvement.recommendation,
+                priority=resume_improvement.priority,
+            )
+            for resume_improvement in result.resume_improvements
+        ],
+    )
+
+
+def _to_comparison_response(
+    comparison: ResumeAnalysisComparison,
+) -> ResumeAnalysisComparisonResponse:
+    """Map the domain `ResumeAnalysisComparison` onto its API response shape, field by field."""
+    return ResumeAnalysisComparisonResponse(
+        score_before=comparison.score_before,
+        score_after=comparison.score_after,
+        score_delta=comparison.score_delta,
+        status=comparison.status,
+        category_comparisons=[
+            SkillCategoryComparisonResponse(
+                category=category.category,
+                score_before=category.score_before,
+                score_after=category.score_after,
+                score_delta=category.score_delta,
+                status=category.status,
+                newly_matched_skills=category.newly_matched_skills,
+                newly_missing_skills=category.newly_missing_skills,
+            )
+            for category in comparison.category_comparisons
+        ],
+        strengths_gained=comparison.strengths_gained,
+        strengths_lost=comparison.strengths_lost,
+        weaknesses_resolved=comparison.weaknesses_resolved,
+        weaknesses_remaining=comparison.weaknesses_remaining,
+        new_weaknesses=comparison.new_weaknesses,
+    )
+
+
 def _to_domain_history(session: ConversationSessionResponse) -> list[ConversationExchange]:
     """Map the API's `ConversationSessionResponse.history` onto domain `ConversationExchange`s."""
     return [
@@ -205,7 +325,7 @@ def _get_stored_plan_or_404(store: TailoringPlanStore, plan_id: str) -> StoredPl
 def _run_applier(
     applier: SuggestionApplier,
     stored_plan: StoredPlan,
-    payload: ApplySuggestionsRequest | ExportResumeRequest,
+    payload: ApplySuggestionsRequest | ExportResumeRequest | ReanalyzeRequest,
 ) -> ApplyResult:
     """Run `applier` against `stored_plan`, mapping its typed errors onto HTTP responses.
 
@@ -284,6 +404,7 @@ async def generate_tailoring_suggestions(
             plan=result.plan,
             structured_resume=result.structured_resume,
             evidence_store=result.evidence_store,
+            job_description=payload.job_description,
         )
     )
 
@@ -396,4 +517,80 @@ async def export_final_resume(
             "Content-Disposition": f'attachment; filename="{exported.filename}"',
             "X-Export-Fidelity": exported.fidelity.value,
         },
+    )
+
+
+@router.post("/tailoring-suggestions/{plan_id}/reanalyze", response_model=ReanalyzeResponse)
+async def reanalyze_after_apply(
+    plan_id: str,
+    payload: ReanalyzeRequest,
+    applier: SuggestionApplier = Depends(get_suggestion_applier),
+    store: TailoringPlanStore = Depends(get_tailoring_plan_store),
+    workflow: ResumeAnalysisWorkflow = Depends(get_post_apply_analysis_workflow),
+    settings: Settings = Depends(get_settings),
+) -> ReanalyzeResponse:
+    """Re-analyze `plan_id`'s applied resume against its own job description and compare.
+
+    The Post-Apply Analysis Loop (see
+    `docs/features/postapply-analysis-loop.md`): re-derives the final
+    resume exactly as `/apply`/`/export` do (same `_run_applier`, same
+    trust boundary -- selections/edits are never trusted as the final
+    resume itself, only as instructions checked against the stored
+    plan), re-analyzes it with the same `ResumeAnalysisWorkflow` behind
+    `/analyze`, against `stored_plan.job_description` -- never a
+    client-supplied job description, so the comparison can't silently
+    drift onto a different JD than the one this plan (and the original
+    analysis) targeted. The comparison itself is pure, deterministic
+    domain logic (`app.analysis.comparison`); no LLM is asked whether the
+    score improved.
+
+    If re-analysis itself fails (gateway/provider failure, validation
+    failure), this raises unchanged -- exactly like `/analyze` on its own
+    failure path -- rather than returning a fabricated comparison. The
+    resume that was already applied is entirely unaffected either way:
+    this endpoint never mutates the stored plan.
+    """
+    logger.info(
+        "reanalyze_after_apply_received",
+        plan_id=plan_id,
+        selected_count=len(payload.selected_suggestion_ids),
+        edited_count=len(payload.edited_texts),
+        provider=settings.primary_provider,
+    )
+    start = time.perf_counter()
+    stored_plan = _get_stored_plan_or_404(store, plan_id)
+
+    apply_result = _run_applier(applier, stored_plan, payload)
+    final_resume_text = apply_result.final_resume.to_text()
+
+    try:
+        after_result = await workflow.analyze(
+            resume=final_resume_text,
+            job_description=stored_plan.job_description,
+        )
+    except Exception as exc:
+        logger.error(
+            "reanalyze_after_apply_failed",
+            plan_id=plan_id,
+            provider=settings.primary_provider,
+            elapsed_ms=(time.perf_counter() - start) * 1000,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        raise
+
+    before_result = _to_domain_analysis(payload.previous_analysis)
+    comparison = compute_resume_analysis_comparison(before_result, after_result)
+
+    logger.info(
+        "reanalyze_after_apply_completed",
+        plan_id=plan_id,
+        provider=settings.primary_provider,
+        elapsed_ms=(time.perf_counter() - start) * 1000,
+        comparison_status=comparison.status.value,
+        score_delta=comparison.score_delta,
+    )
+    return ReanalyzeResponse(
+        after_analysis=_to_analysis_response(after_result),
+        comparison=_to_comparison_response(comparison),
     )
