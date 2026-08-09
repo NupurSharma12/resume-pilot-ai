@@ -23,7 +23,10 @@ provider that either succeeds or fails, exactly as before; the multi-model
 retry is entirely internal (see `_call_with_model_fallback`).
 
 A per-model attempt is retried against the *next* model on: a timeout or
-network error, HTTP 429, any HTTP 5xx, an empty response (no `choices`, or
+network error, HTTP 429, HTTP 404 (an invalid/retired model id, or
+OpenRouter reporting no provider currently serving that free model — see
+`_RETRYABLE_STATUS_CODES`'s comment for why this is treated as per-model,
+not per-request), any HTTP 5xx, an empty response (no `choices`, or
 empty `message.content`), malformed JSON, or a `pydantic.ValidationError`
 from `generate_structured`'s schema check. All of these are treated as
 "this particular model didn't work this time," not "the request itself is
@@ -67,11 +70,19 @@ logger = get_logger(__name__)
 _BASE_URL = "https://openrouter.ai/api/v1"
 _TIMEOUT_SECONDS = 30.0
 
-# Status codes worth retrying against another provider — the same
-# reasoning as GeminiGateway's `_RETRYABLE_CLIENT_STATUS_CODES`: 429 is
+# Status codes worth retrying against the next configured model: 429 is
 # rate limiting, 408 a request timeout, and any 5xx is the server's own
-# transient failure, not a problem with the request.
-_RETRYABLE_STATUS_CODES = {408, 429}
+# transient failure — the same reasoning as GeminiGateway's
+# `_RETRYABLE_CLIENT_STATUS_CODES`. 404 is the one deliberate difference
+# from Gemini's classification: OpenRouter returns HTTP 404 both for a
+# genuinely invalid/retired model id and for "no provider is currently
+# serving this free model" (a real, documented OpenRouter capacity
+# condition, functionally transient) — either way it describes a problem
+# with *that one model*, not the request, and the next configured model
+# has a real chance of working. Gemini has no equivalent per-provider
+# model list to route around, so a 404 there still means "this request is
+# broken" and stays permanent (see `gemini_gateway._classify_exception`).
+_RETRYABLE_STATUS_CODES = {404, 408, 429}
 
 R = TypeVar("R")
 
