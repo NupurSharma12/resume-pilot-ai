@@ -1,0 +1,39 @@
+{
+  // Deliberately NOT referenced from the root tsconfig.json / `tsc -b`
+  // composite build: e2e/ imports *types only* from src/ (see e2e/
+  // fixtures/session.ts), but including this project in the same `-b`
+  // graph as tsconfig.app.json pulled those src files into two
+  // differently-configured compilations at once and broke an unrelated
+  // Vite-only `?url` import in src/lib/extractText.ts. Typechecked on its
+  // own instead -- see package.json's `typecheck:e2e` script -- which
+  // has no such cross-project effect and is exactly as strict.
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["ES2023", "DOM"],
+    // "vite/client" is required here too: e2e/fixtures/session.ts imports
+    // *types* from src/session/resumeSessionTypes.ts, which transitively
+    // reaches src/components/ResumeInput.tsx -> the extractText hook ->
+    // a Vite-only `?url` worker import, the same as tsconfig.app.json.
+    "types": ["node", "vite/client"],
+    "allowArbitraryExtensions": true,
+    "skipLibCheck": true,
+
+    /* Bundler mode -- same as tsconfig.app.json, so relative imports
+       between e2e/ and src/ don't need explicit .js extensions the way
+       tsconfig.node.json's nodenext resolution requires. */
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["e2e", "playwright.config.ts"]
+}

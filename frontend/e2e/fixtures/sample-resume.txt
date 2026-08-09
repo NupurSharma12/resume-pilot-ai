@@ -1,0 +1,12 @@
+SUMMARY
+Backend engineer with 5 years of experience building internal tools.
+
+SKILLS
+Python
+Django
+PostgreSQL
+
+EXPERIENCE
+Built internal tooling using Python and Django, serving 200+ internal users.
+Migrated a legacy billing system from PHP to Python with zero downtime.
+Irrelevant certification from 2005.
