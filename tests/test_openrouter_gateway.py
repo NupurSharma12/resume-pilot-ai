@@ -105,7 +105,7 @@ async def test_generate_structured_embeds_schema_and_requests_json_mode() -> Non
     assert result == _DummyResult(value="ok", count=2)
 
 
-@pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+@pytest.mark.parametrize("status", [404, 429, 500, 502, 503, 504])
 async def test_transient_status_codes_raise_transient_error_when_no_models_left(
     status: int,
 ) -> None:
@@ -143,8 +143,14 @@ def test_classify_status_boundary_values() -> None:
     assert isinstance(_classify_status(408), TransientGatewayError)
     assert isinstance(_classify_status(500), TransientGatewayError)
     assert isinstance(_classify_status(599), TransientGatewayError)
+    # 404 is retried across the model list, not failed fast -- it covers
+    # both a retired/invalid model id and OpenRouter's own transient "no
+    # provider currently serving this free model" condition, either of
+    # which is specific to the model just tried, not the request itself.
+    assert isinstance(_classify_status(404), TransientGatewayError)
     assert isinstance(_classify_status(400), PermanentGatewayError)
-    assert isinstance(_classify_status(404), PermanentGatewayError)
+    assert isinstance(_classify_status(401), PermanentGatewayError)
+    assert isinstance(_classify_status(403), PermanentGatewayError)
 
 
 def test_construction_requires_api_key() -> None:
@@ -187,6 +193,30 @@ class TestModelFallback:
         response = await gateway.generate(_request())
 
         assert requested_models == ["model-a:free", "model-b:free"]
+        assert response.content == "from model b"
+        assert response.model == "model-b:free"
+
+    async def test_falls_back_to_second_model_on_404(self) -> None:
+        """The exact bug from production: a retired/invalid first model must not crash the chain.
+
+        A 404 for one model (invalid/retired id, or OpenRouter reporting
+        no provider currently serving it) is specific to that model, not
+        the request -- the next configured model is tried instead of
+        raising `PermanentGatewayError` and skipping the rest of the list.
+        """
+        requested_models: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            requested_models.append(body["model"])
+            if body["model"] == "retired-model:free":
+                return httpx.Response(404, json={"error": "model not found"})
+            return _ok_response("from model b")
+
+        gateway = _make_gateway(handler, models=["retired-model:free", "model-b:free"])
+        response = await gateway.generate(_request())
+
+        assert requested_models == ["retired-model:free", "model-b:free"]
         assert response.content == "from model b"
         assert response.model == "model-b:free"
 

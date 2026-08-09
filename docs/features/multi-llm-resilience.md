@@ -30,7 +30,7 @@ Gemini
 
 Secondary
 
-OpenRouter (Gemma → Qwen → Llama → DeepSeek, tried internally — see
+OpenRouter (Gemma → Gemma → Nemotron → Nemotron, tried internally — see
 "OpenRouter Model-Level Fallback" below)
 
 ↓
@@ -82,41 +82,64 @@ Do not retry (stop the chain immediately)
 ## OpenRouter Model-Level Fallback
 
 OpenRouter's free-tier catalog is unreliable in ways a single fixed model
-can't absorb on its own: individual free models get rate-limited, retired,
-or (observed in production) silently return HTTP 200 with empty
-`message.content` for reasoning-style models under long structured-output
-prompts. Rather than let any one free model's bad day take down the whole
-"openrouter" leg of the provider chain and fall straight through to Mock,
-`OpenRouterGateway` (`gateways/llm/openrouter_gateway.py`) is configured
-with an **ordered list** of models —
-`RESUMEPILOT_OPENROUTER_MODELS` (default: Gemma → Qwen → Llama → DeepSeek)
-— and tries them itself, one at a time, entirely internally. From
-`GatewayChain`'s point of view, "openrouter" is still a single provider
-that either succeeds or fails exactly as before; nothing about the
-provider-level chain above changed.
+can't absorb on its own: individual free models get rate-limited, retired
+(returning HTTP 404 once their `:free` id stops resolving to any
+provider), or (observed in production) silently return HTTP 200 with
+empty `message.content` for reasoning-style models under long
+structured-output prompts. Rather than let any one free model's bad day
+take down the whole "openrouter" leg of the provider chain and fall
+straight through to Mock, `OpenRouterGateway`
+(`gateways/llm/openrouter_gateway.py`) is configured with an **ordered
+list** of models — `RESUMEPILOT_OPENROUTER_MODELS` (default: two Gemma
+models, then two Nemotron models — see `config.py`'s `openrouter_models`
+docstring for why this exact list, and how it was verified) — and tries
+them itself, one at a time, entirely internally. From `GatewayChain`'s
+point of view, "openrouter" is still a single provider that either
+succeeds or fails exactly as before; nothing about the provider-level
+chain above changed.
+
+**A production incident drove the 404 handling below**: the first
+configured free model returned HTTP 404 (OpenRouter had stopped serving
+it), and — before this fix — a 404 was classified identically to an
+authentication failure (`PermanentGatewayError`, no retry across
+models), so it crashed the entire request instead of falling through to
+the next configured model. 404 is now classified as retryable
+(`TransientGatewayError`) specifically within `OpenRouterGateway`'s
+model-level fallback, for a reason that does **not** apply to
+`GatewayChain`'s provider-level 404 handling (Gemini, say): OpenRouter's
+404 for a chat completion can mean either "this exact model id is
+invalid/retired" or "no provider is currently serving this free model" —
+both are properties of *the one model just tried*, not the request
+itself, and the next configured model has a real chance of working.
+Gemini has no equivalent internal model list to route around, so a 404
+there still means the request itself is broken and correctly stays
+permanent.
 
 ```
 OpenRouter
     │
     ▼
- Gemma  ──(429 / 5xx / timeout / empty response / malformed JSON / ValidationError)──▶  Qwen
-                                                                                          │
-                                                                    (same failure modes)  ▼
-                                                                                        Llama
-                                                                                          │
-                                                                    (same failure modes)  ▼
-                                                                                      DeepSeek
-                                                                                          │
-                                                            (all four models exhausted)   ▼
-                                                                          TransientGatewayError
-                                                                        → GatewayChain falls back
-                                                                          to the next provider (Mock)
+ Gemma-4-26b  ──(429 / 404 / 5xx / timeout / empty response / malformed JSON / ValidationError)──▶  Gemma-4-31b
+                                                                                                        │
+                                                                                  (same failure modes)  ▼
+                                                                                                Nemotron-3-nano
+                                                                                                        │
+                                                                                  (same failure modes)  ▼
+                                                                                             Nemotron-3-super
+                                                                                                        │
+                                                                          (all four models exhausted)   ▼
+                                                                                        TransientGatewayError
+                                                                                      → GatewayChain falls back
+                                                                                        to the next provider (Mock)
 ```
 
 **Retry the next model on:**
 
 - timeout / network error
 - HTTP 429
+- HTTP 404 (invalid/retired model id, or OpenRouter reporting no
+  provider currently serving this free model — see the production
+  incident called out above)
 - any HTTP 5xx
 - an empty response (no `choices`, or empty/null `message.content` —
   this is the specific failure mode that motivated this feature)

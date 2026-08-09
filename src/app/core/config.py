@@ -73,28 +73,35 @@ class Settings(BaseSettings):
     openrouter_models: list[str] = Field(
         default_factory=lambda: [
             "google/gemma-4-26b-a4b-it:free",
-            "qwen/qwen3-30b-a3b:free",
-            "meta-llama/llama-3.3-70b-instruct:free",
-            "deepseek/deepseek-chat:free",
+            "google/gemma-4-31b-it:free",
+            "nvidia/nemotron-3-nano-30b-a3b:free",
+            "nvidia/nemotron-3-super-120b-a12b:free",
         ],
         description=(
             "Ordered list of OpenRouter model identifiers to try, free models by default. "
+            "Verified against https://openrouter.ai/api/v1/models as currently valid "
+            "':free'-suffixed ids on 2026-08-09 — the previous defaults (Qwen/Llama/DeepSeek "
+            "entries) had all lost their free tier by then and were 404ing on every call. "
             "OpenRouterGateway attempts them in order on every call, falling back to the "
-            "next one on a timeout, HTTP 429, HTTP 5xx, an empty response, malformed JSON, "
-            "or a schema-validation failure (see OpenRouterGateway's module docstring) — "
-            "only once every model in this list has failed does the 'openrouter' leg of "
-            "the provider chain itself fail, letting GatewayChain fall back to the next "
-            "configured provider. Does NOT retry across models on an authentication "
-            "failure, a bad request, or an invalid API key (HTTP 401/403/400): those fail "
-            "identically against every model, so the first one fails fast instead of "
-            "burning through the rest of the list. OpenRouter's free-tier catalog changes "
-            "over time (models get retired); if a model starts returning HTTP 404, check "
-            "https://openrouter.ai/api/v1/models for a current ':free'-suffixed "
-            "replacement. Avoid *reasoning* models (e.g. openai/gpt-oss-20b:free): one was "
-            "observed, under this app's long structured-output prompts, returning "
-            "finish_reason=stop with an empty/null message.content — exactly the failure "
-            "mode this list-based fallback exists to route around, but still wasted "
-            "latency on every call if it's first in the list."
+            "next one on a timeout, HTTP 429, HTTP 404, HTTP 5xx, an empty response, "
+            "malformed JSON, or a schema-validation failure (see OpenRouterGateway's module "
+            "docstring) — only once every model in this list has failed does the "
+            "'openrouter' leg of the provider chain itself fail, letting GatewayChain fall "
+            "back to the next configured provider. Does NOT retry across models on an "
+            "authentication failure, a bad request, or an invalid API key (HTTP "
+            "401/403/400): those fail identically against every model, so the first one "
+            "fails fast instead of burning through the rest of the list. HTTP 404 is "
+            "retried, not failed fast — see OpenRouterGateway's `_RETRYABLE_STATUS_CODES` "
+            "comment for why, since it covers both a retired model id and OpenRouter's own "
+            "transient 'no provider currently serving this free model' condition. Keeping "
+            "this list current is still worthwhile even so: a dead first entry still costs "
+            "one wasted round trip before falling through to the next model. If every model "
+            "here starts 404ing, check https://openrouter.ai/api/v1/models for current "
+            "':free'-suffixed replacements. Avoid *reasoning* models (e.g. "
+            "openai/gpt-oss-20b:free): one was observed, under this app's long "
+            "structured-output prompts, returning finish_reason=stop with an empty/null "
+            "message.content — exactly the failure mode this list-based fallback exists to "
+            "route around, but still wasted latency on every call if it's first in the list."
         ),
     )
 
