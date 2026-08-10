@@ -8,6 +8,7 @@ from app.api.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging, get_logger
 from app.gateways.llm.factory import build_llm_gateway
+from app.persistence.factory import build_persistence_store
 from app.sessions.conversation_session import ConversationSessionStore
 from app.sessions.tailoring_plan_store import TailoringPlanStore
 
@@ -52,6 +53,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # generate -> apply -> export request sequence (see
     # `app.sessions.tailoring_plan_store`'s module docstring).
     app.state.tailoring_plan_store = TailoringPlanStore()
+    # Durable product history (Resume/ResumeVersion/JobPreparation) --
+    # distinct from the two transient stores above, which only ever hold
+    # in-flight workflow-sequencing state. Implementation is chosen by
+    # `settings.persistence_backend` (see `build_persistence_store`);
+    # `memory` (the default) is itself still process-lifetime-only, same
+    # as the stores above, until the `postgres` backend exists.
+    app.state.persistence_store = build_persistence_store(settings)
 
     app.add_middleware(
         CORSMiddleware,
