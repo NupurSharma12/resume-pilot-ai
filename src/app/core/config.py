@@ -31,18 +31,30 @@ class Settings(BaseSettings):
     # Persistence backend (Configurable Persistence): `build_persistence_store`
     # (persistence/factory.py) reads this to decide which `PersistenceStore`
     # implementation to construct. `memory` is the default so a fresh clone
-    # runs with zero database configuration; `postgres` is a placeholder
-    # name reserved for a later milestone (see persistence/factory.py) and
-    # is not yet implemented. No `database_url` setting exists yet — it
-    # would be unused until the postgres adapter exists, so adding it now
-    # would be speculative configuration for a backend this codebase can't
-    # actually talk to.
+    # runs with zero database configuration; `postgres` names the
+    # PostgreSQL/Neon foundation (SQLAlchemy models + Alembic migrations,
+    # see persistence/db/) established in this milestone -- but
+    # `PostgresPersistenceStore` itself does not exist yet (a later
+    # milestone), so selecting `postgres` still raises `NotImplementedError`
+    # from `build_persistence_store`, not a real connection.
     persistence_backend: Literal["memory", "postgres"] = Field(
         default="memory",
         description=(
             "Which PersistenceStore implementation to use. 'memory' (the default) requires "
-            "no configuration and does not survive a process restart. 'postgres' is reserved "
-            "for a future milestone and is not yet implemented."
+            "no configuration and does not survive a process restart. 'postgres' selects the "
+            "PostgreSQL/Neon backend -- its database foundation (models, migrations) exists, "
+            "but PersistenceStore wiring is a later milestone."
+        ),
+    )
+    database_url: str | None = Field(
+        default=None,
+        description=(
+            "SQLAlchemy async connection URL for PostgreSQL, e.g. "
+            "'postgresql+asyncpg://user:password@host/dbname?ssl=require'. Only required when "
+            "persistence_backend='postgres' (see persistence/db/engine.py's get_database_url) "
+            "or when running Alembic migrations against a real database -- unused and safe to "
+            "leave unset under the default 'memory' backend. Never commit a real value; set it "
+            "via the environment or a local, gitignored .env."
         ),
     )
 
