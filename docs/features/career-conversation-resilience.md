@@ -16,11 +16,11 @@ state on every reload.
 used to do this, in order:
 
 ```python
-session.record_answer(answer)      # mutates session immediately
+session.record_answer(answer)  # mutates session immediately
 if session.turn_count >= MAX_CONVERSATION_TURNS:
     session.complete(...)
     return session
-await self._advance(session)       # the LLM call -- can fail
+await self._advance(session)  # the LLM call -- can fail
 return session
 ```
 
@@ -64,8 +64,8 @@ async def submit_answer(self, session, answer):
     if session.current_question is None:
         raise ValueError("No open question to answer.")
     if session.turn_count + 1 >= MAX_CONVERSATION_TURNS:
-        session.record_answer(answer)          # no I/O below this branch --
-        session.complete(reason=...)            # nothing here can fail
+        session.record_answer(answer)  # no I/O below this branch --
+        session.complete(reason=...)  # nothing here can fail
         return session
 
     decision = await self._request_decision(session, pending_answer=answer)
