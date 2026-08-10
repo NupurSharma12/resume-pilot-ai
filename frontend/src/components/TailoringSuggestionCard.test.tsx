@@ -79,19 +79,27 @@ describe('TailoringSuggestionCard: Preview Change comparator', () => {
     expect(screen.getByText(fixtureSuggestionInsert.suggested_text)).toBeInTheDocument()
   })
 
-  it('shows an old-vs-new comparator for an update/replace operation', () => {
+  it('shows an old-vs-new comparator for an update/replace operation, word-highlighted', () => {
     const updateSuggestion: TailoringSuggestion = {
       ...fixtureSuggestionAppend,
       operation: 'update',
       current_text: 'Backend engineer with 5 years of experience.',
       suggested_text: 'Full-stack engineer with React and Python experience.',
     }
-    renderCard({ suggestion: updateSuggestion })
+    const { container } = renderCard({ suggestion: updateSuggestion })
 
     fireEvent.click(screen.getByRole('button', { name: /preview change/i }))
 
-    expect(screen.getByText('Backend engineer with 5 years of experience.')).toBeInTheDocument()
-    expect(screen.getByText('Full-stack engineer with React and Python experience.')).toBeInTheDocument()
+    // Both full sentences are present (now split across highlighted-word
+    // spans, so checked via textContent rather than a single getByText
+    // match -- see SideBySideDiff's word-level rendering).
+    expect(container.textContent).toContain('Backend engineer with 5 years of experience.')
+    expect(container.textContent).toContain('Full-stack engineer with React and Python experience.')
+    // Only the words that actually changed are highlighted -- the shared
+    // words ("engineer", "with", "experience.") are not.
+    const marks = Array.from(container.querySelectorAll('mark')).map((el) => el.textContent)
+    expect(marks).toEqual(expect.arrayContaining(['Backend', 'Full-stack']))
+    expect(marks).not.toEqual(expect.arrayContaining(['engineer']))
   })
 
   it('previews the edited text, not the original suggested text, once the user has customized it', () => {

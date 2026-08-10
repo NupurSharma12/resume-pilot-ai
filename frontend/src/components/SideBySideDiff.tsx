@@ -1,4 +1,33 @@
-import type { DiffCell, DiffHunk } from '../lib/resumeSectionDiff'
+import type { DiffCell, DiffHunk, DiffSegment } from '../lib/resumeSectionDiff'
+
+// Renders a modified cell's `segments` -- unchanged words plain, changed
+// words wrapped in `<mark>` with a stronger highlight than the cell's own
+// background -- so within a "genuine replacement" row, only the words that
+// actually differ stand out, GitHub-inline-diff-style. Only used when
+// `segments` is present (see `DiffCell`'s docstring); an unchanged/pure-
+// addition/pure-removal cell has nothing partial to highlight and renders
+// its plain `text` instead (see `DiffCellView` below).
+function DiffSegments({
+  segments,
+  markClassName,
+}: {
+  segments: DiffSegment[]
+  markClassName: string
+}) {
+  return (
+    <>
+      {segments.map((segment, index) =>
+        segment.changed ? (
+          <mark key={index} className={markClassName}>
+            {segment.text}
+          </mark>
+        ) : (
+          <span key={index}>{segment.text}</span>
+        ),
+      )}
+    </>
+  )
+}
 
 // One cell of one diff row -- `null` means "nothing on this side" (a pure
 // addition has no left cell, a pure removal has no right cell), rendered as
@@ -11,7 +40,14 @@ function DiffCellView({ cell }: { cell: DiffCell | null }) {
     return (
       <div className="bg-emerald-50 px-3 py-1 text-emerald-800">
         <span className="mr-1.5 select-none text-emerald-500">+</span>
-        {cell.text}
+        {cell.segments ? (
+          <DiffSegments
+            segments={cell.segments}
+            markClassName="rounded-sm bg-emerald-200 font-semibold text-emerald-900"
+          />
+        ) : (
+          cell.text
+        )}
       </div>
     )
   }
@@ -19,7 +55,14 @@ function DiffCellView({ cell }: { cell: DiffCell | null }) {
     return (
       <div className="bg-rose-50 px-3 py-1 text-rose-700">
         <span className="mr-1.5 select-none text-rose-500">-</span>
-        {cell.text}
+        {cell.segments ? (
+          <DiffSegments
+            segments={cell.segments}
+            markClassName="rounded-sm bg-rose-200 font-semibold text-rose-900 line-through decoration-rose-500"
+          />
+        ) : (
+          cell.text
+        )}
       </div>
     )
   }

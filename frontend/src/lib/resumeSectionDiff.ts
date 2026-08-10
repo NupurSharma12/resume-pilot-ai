@@ -94,9 +94,22 @@ export function diffLines(before: string[], after: string[]): DiffLine[] {
 // unchanged block (see `buildHunks`'s context-window logic).
 // ---------------------------------------------------------------------------
 
+// One token-sized slice of a modified line's text -- `changed: true` marks
+// exactly the words that differ from the other side, `changed: false` marks
+// shared context (e.g. a common prefix/suffix) within that same line. Only
+// present on a `DiffCell` for the two-sided "genuine replacement" case (see
+// `buildReplaceRows`); absent for unchanged/pure-addition/pure-removal
+// cells, which have nothing partial to highlight -- the cell's `text` is
+// either entirely context or entirely new/removed already.
+export interface DiffSegment {
+  text: string
+  changed: boolean
+}
+
 export interface DiffCell {
   type: DiffLineType
   text: string
+  segments?: DiffSegment[]
 }
 
 export interface DiffRow {
@@ -117,6 +130,44 @@ export interface DiffSection {
 
 function stripLeadingPunctuation(text: string): string {
   return text.replace(/^[,;:\s]+/, '')
+}
+
+// Splits text into words and whitespace runs as separate tokens (e.g.
+// "Senior Software" -> ["Senior", " ", "Software"]), preserving exact
+// spacing when segments are rejoined for display. Word-level, not
+// character-level: GitHub's own inline diff highlighting works the same
+// way -- it reads far more cleanly for prose than a character-by-character
+// highlight would (e.g. "years" -> "year" would highlight only the "s"
+// character-level, but reads better as the whole word changing).
+function tokenizeWords(text: string): string[] {
+  return text.match(/\S+|\s+/g) ?? []
+}
+
+// Word-level diff for one pair of lines that are known to differ but share
+// no simple prefix relationship (see `buildReplaceRows` below) -- the same
+// LCS algorithm as `diffLines`, just applied to word tokens instead of
+// whole lines, so a minimal, order-preserving alignment of shared words
+// falls out for free rather than needing a second algorithm. Returns the
+// two sides' segments in original left-to-right order, with a token only
+// ever marked `changed` on the side(s) it isn't shared with.
+function buildWordLevelReplaceCells(oldText: string, newText: string): { left: DiffCell; right: DiffCell } {
+  const tokenDiff = diffLines(tokenizeWords(oldText), tokenizeWords(newText))
+  const leftSegments: DiffSegment[] = []
+  const rightSegments: DiffSegment[] = []
+  for (const token of tokenDiff) {
+    if (token.type === 'unchanged') {
+      leftSegments.push({ text: token.text, changed: false })
+      rightSegments.push({ text: token.text, changed: false })
+    } else if (token.type === 'removed') {
+      leftSegments.push({ text: token.text, changed: true })
+    } else {
+      rightSegments.push({ text: token.text, changed: true })
+    }
+  }
+  return {
+    left: { type: 'removed', text: oldText, segments: leftSegments },
+    right: { type: 'added', text: newText, segments: rightSegments },
+  }
 }
 
 // The one place this module decides how to *pair* one "old" unit of text
@@ -142,7 +193,12 @@ function stripLeadingPunctuation(text: string): string {
 // - Anything else is a genuine replacement (`update`/`replace`/
 //   `add_emphasis`, or a section-level pairing with no simple prefix
 //   relationship): one row, the old text removed on the left and the new
-//   text added on the right, aligned in the same row.
+//   text added on the right, aligned in the same row -- but word-diffed
+//   (`buildWordLevelReplaceCells`) rather than opaque: shared words (e.g. an
+//   unrelated word inserted mid-sentence, or one word swapped for another)
+//   carry `segments` marking only the actually-different words as changed,
+//   so a one-phrase edit inside a long sentence never reads as though the
+//   whole sentence was rewritten.
 export function buildReplaceRows(oldText: string, newText: string): DiffRow[] {
   if (oldText === newText) {
     return [{ left: { type: 'unchanged', text: oldText }, right: { type: 'unchanged', text: newText } }]
@@ -163,7 +219,8 @@ export function buildReplaceRows(oldText: string, newText: string): DiffRow[] {
     }
     return rows
   }
-  return [{ left: { type: 'removed', text: oldText }, right: { type: 'added', text: newText } }]
+  const { left, right } = buildWordLevelReplaceCells(oldText, newText)
+  return [{ left, right }]
 }
 
 type Segment =

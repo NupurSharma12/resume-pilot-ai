@@ -83,6 +83,60 @@ describe('SideBySideDiff', () => {
     expect(row.textContent).toContain('Full-stack engineer.')
   })
 
+  it('highlights only the changed segments of a modified cell, leaving unchanged text plain', () => {
+    const hunks: DiffHunk[] = [
+      {
+        rows: [
+          {
+            left: {
+              type: 'removed',
+              text: 'Backend engineer.',
+              segments: [
+                { text: 'Backend', changed: true },
+                { text: ' ', changed: false },
+                { text: 'engineer.', changed: false },
+              ],
+            },
+            right: {
+              type: 'added',
+              text: 'Full-stack engineer.',
+              segments: [
+                { text: 'Full-stack', changed: true },
+                { text: ' ', changed: false },
+                { text: 'engineer.', changed: false },
+              ],
+            },
+          },
+        ],
+      },
+    ]
+    const { container } = render(<SideBySideDiff hunks={hunks} />)
+
+    const marks = Array.from(container.querySelectorAll('mark')).map((el) => el.textContent)
+    expect(marks).toEqual(['Backend', 'Full-stack'])
+    // The shared word is present but not inside a <mark>.
+    expect(container.textContent).toContain('engineer.')
+    expect(container.querySelectorAll('mark')[0].textContent).not.toContain('engineer')
+  })
+
+  it('falls back to plain text when a modified cell has no segments', () => {
+    const hunks: DiffHunk[] = [
+      {
+        rows: [
+          {
+            left: { type: 'removed', text: 'Old text.' },
+            right: { type: 'added', text: 'New text.' },
+          },
+        ],
+      },
+    ]
+    const { container } = render(<SideBySideDiff hunks={hunks} />)
+
+    expect(container.querySelectorAll('mark')).toHaveLength(0)
+    expect(container.textContent).toContain('Old text.')
+    expect(container.textContent).toContain('New text.')
+  })
+
   it('renders multiple hunks with a visual separator between them', () => {
     const hunks: DiffHunk[] = [
       { rows: [{ left: null, right: { type: 'added', text: 'First hunk.' } }] },

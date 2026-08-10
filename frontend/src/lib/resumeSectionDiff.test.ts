@@ -104,13 +104,55 @@ describe('buildReplaceRows', () => {
   })
 
   it('returns a single replace row (old removed, new added) for a genuine rewording', () => {
-    const rows = buildReplaceRows('Backend engineer with 5 years of experience.', 'Full-stack engineer.')
+    const rows = buildReplaceRows('Backend', 'Full-stack')
     expect(rows).toEqual([
       {
-        left: { type: 'removed', text: 'Backend engineer with 5 years of experience.' },
-        right: { type: 'added', text: 'Full-stack engineer.' },
+        left: { type: 'removed', text: 'Backend', segments: [{ text: 'Backend', changed: true }] },
+        right: { type: 'added', text: 'Full-stack', segments: [{ text: 'Full-stack', changed: true }] },
       },
     ])
+  })
+
+  it('highlights only the inserted words for a mid-sentence insertion (the bug report this fixes)', () => {
+    // The exact motivating case: only "15+ years of " was inserted into the
+    // middle of the sentence -- everything else is identical. This must
+    // NOT render as though the whole sentence changed.
+    const before = 'Senior Software Engineer with experience designing enterprise software.'
+    const after =
+      'Senior Software Engineer with 15+ years of experience designing enterprise software.'
+
+    const [row] = buildReplaceRows(before, after)
+
+    expect(row.left?.segments?.every((segment) => !segment.changed)).toBe(true)
+    expect(row.left?.segments?.map((s) => s.text).join('')).toBe(before)
+
+    const changedRightText = row.right?.segments?.filter((s) => s.changed).map((s) => s.text).join('')
+    const unchangedRightText = row.right?.segments
+      ?.filter((s) => !s.changed)
+      .map((s) => s.text)
+      .join('')
+    expect(changedRightText).toBe('15+ years of ')
+    expect(unchangedRightText).toBe(before)
+  })
+
+  it('highlights a single swapped word, leaving the rest of the sentence unmarked', () => {
+    const before = 'Managed a team of 5 engineers.'
+    const after = 'Managed a team of 12 engineers.'
+
+    const [row] = buildReplaceRows(before, after)
+
+    expect(row.left?.segments?.filter((s) => s.changed).map((s) => s.text)).toEqual(['5'])
+    expect(row.right?.segments?.filter((s) => s.changed).map((s) => s.text)).toEqual(['12'])
+  })
+
+  it('round-trips: concatenating every segment reproduces the original text exactly', () => {
+    const before = 'Managed a team of 5 engineers across two time zones.'
+    const after = 'Led a team of 12 engineers across three time zones.'
+
+    const [row] = buildReplaceRows(before, after)
+
+    expect(row.left?.segments?.map((s) => s.text).join('')).toBe(before)
+    expect(row.right?.segments?.map((s) => s.text).join('')).toBe(after)
   })
 })
 
@@ -214,9 +256,13 @@ describe('buildSectionDiffs', () => {
 
     const summary = diffs.find((d) => d.sectionId === 'SUMMARY')
     expect(summary?.isChanged).toBe(true)
-    expect(summary?.hunks[0].rows).toEqual([
-      { left: { type: 'removed', text: 'Backend engineer.' }, right: { type: 'added', text: 'Full-stack engineer.' } },
-    ])
+    const [summaryRow] = summary?.hunks[0].rows ?? []
+    // "Backend" -> "Full-stack" is the only real change; "engineer." is
+    // shared and must not be highlighted on either side.
+    expect(summaryRow.left?.segments?.find((s) => s.text === 'engineer.')?.changed).toBe(false)
+    expect(summaryRow.right?.segments?.find((s) => s.text === 'engineer.')?.changed).toBe(false)
+    expect(summaryRow.left?.segments?.find((s) => s.text === 'Backend')?.changed).toBe(true)
+    expect(summaryRow.right?.segments?.find((s) => s.text === 'Full-stack')?.changed).toBe(true)
 
     const skills = diffs.find((d) => d.sectionId === 'SKILLS')
     expect(skills?.isChanged).toBe(true)
@@ -252,17 +298,47 @@ describe('buildSuggestionDiffHunks', () => {
     expect(hunks).toEqual([{ rows: [{ left: null, right: { type: 'added', text: 'Node.js' } }] }])
   })
 
-  it('produces a single old-vs-new replace row for an update/replace', () => {
+  it('produces a single old-vs-new replace row for an update/replace, word-diffed', () => {
     const hunks = buildSuggestionDiffHunks(
       'Backend engineer with 5 years of experience.',
       'Full-stack engineer with React and Python experience.',
     )
+    const [row] = hunks[0].rows
+
+    // Shared words ("engineer", "with", "experience.") must not be
+    // highlighted -- only the words that actually differ.
+    expect(row.left?.segments?.find((s) => s.text === 'engineer')?.changed).toBe(false)
+    expect(row.left?.segments?.find((s) => s.text === 'with')?.changed).toBe(false)
+    expect(row.left?.segments?.find((s) => s.text === 'experience.')?.changed).toBe(false)
+    expect(row.right?.segments?.find((s) => s.text === 'engineer')?.changed).toBe(false)
+    expect(row.right?.segments?.find((s) => s.text === 'with')?.changed).toBe(false)
+    expect(row.right?.segments?.find((s) => s.text === 'experience.')?.changed).toBe(false)
+
+    expect(row.left?.segments?.filter((s) => s.changed).map((s) => s.text)).toEqual([
+      'Backend',
+      '5',
+      'years',
+      'of',
+    ])
+    expect(row.right?.segments?.filter((s) => s.changed).map((s) => s.text)).toEqual([
+      'Full-stack',
+      'React',
+      'and',
+      'Python',
+    ])
+
     expect(hunks).toEqual([
       {
         rows: [
           {
-            left: { type: 'removed', text: 'Backend engineer with 5 years of experience.' },
-            right: { type: 'added', text: 'Full-stack engineer with React and Python experience.' },
+            left: expect.objectContaining({
+              type: 'removed',
+              text: 'Backend engineer with 5 years of experience.',
+            }),
+            right: expect.objectContaining({
+              type: 'added',
+              text: 'Full-stack engineer with React and Python experience.',
+            }),
           },
         ],
       },
