@@ -28,6 +28,24 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = Field(default_factory=lambda: ["*"])
 
+    # Persistence backend (Configurable Persistence): `build_persistence_store`
+    # (persistence/factory.py) reads this to decide which `PersistenceStore`
+    # implementation to construct. `memory` is the default so a fresh clone
+    # runs with zero database configuration; `postgres` is a placeholder
+    # name reserved for a later milestone (see persistence/factory.py) and
+    # is not yet implemented. No `database_url` setting exists yet — it
+    # would be unused until the postgres adapter exists, so adding it now
+    # would be speculative configuration for a backend this codebase can't
+    # actually talk to.
+    persistence_backend: Literal["memory", "postgres"] = Field(
+        default="memory",
+        description=(
+            "Which PersistenceStore implementation to use. 'memory' (the default) requires "
+            "no configuration and does not survive a process restart. 'postgres' is reserved "
+            "for a future milestone and is not yet implemented."
+        ),
+    )
+
     # Provider chain (Multi-LLM Resilience): `build_llm_gateway`
     # (gateways/llm/factory.py) wires these into an ordered `GatewayChain`
     # — primary is tried first, falling back to secondary then tertiary
