@@ -88,6 +88,13 @@ export const fixtureSuggestions: TailoringSuggestion[] = [
     current_text: 'Python',
     suggested_text: 'Python, TypeScript',
     reason: 'TypeScript experience is missing from Skills.',
+    // 'Resume: {heading}' is the exact shape EvidenceStoreBuilder sends
+    // for resume-item evidence (see suggestionPresentation.ts's
+    // `buildSectionNameMap`) -- present here so this fixture resolves a
+    // real "Skills" section name, the same way a live plan's suggestions
+    // (which cite their own target section's resume evidence whenever
+    // applicable) would, rather than falling back to "Resume Section N".
+    evidence_sources: ['Resume: SKILLS'],
   }),
   suggestion({
     suggestion_id: 'suggestion-1',
@@ -98,6 +105,7 @@ export const fixtureSuggestions: TailoringSuggestion[] = [
     suggested_text: 'Django, Flask',
     reason: 'Flask experience is missing from Skills.',
     selected_by_default: false,
+    evidence_sources: ['Resume: SKILLS'],
   }),
   suggestion({
     suggestion_id: 'suggestion-2',
@@ -107,6 +115,7 @@ export const fixtureSuggestions: TailoringSuggestion[] = [
     current_text: null,
     suggested_text: 'Led a cross-team migration involving 4 engineers.',
     reason: 'People-management evidence is missing from Experience.',
+    evidence_sources: ['Conversation Turn 1', 'Resume: EXPERIENCE'],
   }),
 ]
 

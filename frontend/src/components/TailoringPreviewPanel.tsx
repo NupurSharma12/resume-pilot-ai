@@ -3,22 +3,28 @@ import { ArrowLeft, Check, Wand2 } from 'lucide-react'
 import Badge from './Badge'
 import Button from './Button'
 import SideBySideDiff from './SideBySideDiff'
-import { buildSectionDiffs } from '../lib/resumeSectionDiff'
-import { summarizeSuggestionChange } from '../lib/suggestionPresentation'
+import { buildSuggestionDiffHunks } from '../lib/resumeSectionDiff'
+import {
+  buildSectionFallbackOrdinals,
+  buildSectionNameMap,
+  groupSuggestionsBySection,
+  summarizeSuggestionChange,
+} from '../lib/suggestionPresentation'
 import type { TailoringSuggestion } from '../data/tailoringSuggestionsTypes'
 
 interface TailoringPreviewPanelProps {
-  // The resume text before this preview's selection was applied, and the
-  // previewed (not-yet-committed) result -- both plain text, diffed
-  // section by section purely for display (see resumeSectionDiff.ts).
-  originalResumeText: string
-  previewResumeText: string
   // Every suggestion included in this preview's selection, so the panel
   // can show "what's included" without the candidate having to cross-
-  // reference the review list from memory. `alreadyAppliedIds` labels the
-  // ones that were committed in an earlier phase, distinct from ones newly
-  // selected in this phase -- see this feature's "phased application" docs.
+  // reference the review list from memory, AND so the diff itself can be
+  // built directly from each suggestion's own current_text/suggested_text
+  // -- see this component's own docstring for why that replaced diffing
+  // the assembled before/after resume text.
   includedSuggestions: TailoringSuggestion[]
+  // User-customized replacement text, keyed by suggestion_id -- mirrors
+  // TailoredResumePage's `tailoringEditedTexts` exactly, so the preview
+  // always diffs against what Apply Now will actually send, the same way
+  // TailoringSuggestionCard's own per-suggestion comparator already does.
+  editedTexts: Record<string, string>
   alreadyAppliedIds: Set<string>
   isApplying: boolean
   applyError: string | null
@@ -33,23 +39,53 @@ interface TailoringPreviewPanelProps {
 // do that, then previews again; keeping this panel read-only means the
 // diff on screen can never silently drift out of sync with what "Apply
 // Now" is about to commit.
+//
+// The diff is built directly from each included suggestion's own
+// `current_text`/`suggested_text` (via `buildSuggestionDiffHunks`, the
+// exact same function TailoringSuggestionCard's own per-suggestion
+// comparator already uses), grouped by section via `target_section_id`
+// (via `suggestionPresentation.ts`'s `groupSuggestionsBySection` -- the
+// same grouping the suggestion review list itself uses). This
+// deliberately does NOT diff the assembled original resume text against
+// the assembled final resume text: those are two independently-formatted
+// blobs (the original is whatever the candidate uploaded/pasted verbatim;
+// the final text is the backend's own re-rendering), and matching
+// section headings between them by exact string equality turned out to
+// be fragile in practice -- a resume whose extracted text didn't line up
+// with the backend's rendering (e.g. line breaks lost during PDF/DOCX
+// extraction) made every section look "fully added," with no original
+// content shown at all, defeating the entire point of a diff. Building
+// the diff from suggestions instead sidesteps that completely: a
+// suggestion's `current_text`/`suggested_text` are exact, backend-tracked
+// values with no re-derivation involved, so the diff is precise
+// regardless of how the surrounding document happens to be formatted.
 export default function TailoringPreviewPanel({
-  originalResumeText,
-  previewResumeText,
   includedSuggestions,
+  editedTexts,
   alreadyAppliedIds,
   isApplying,
   applyError,
   onBack,
   onApplyNow,
 }: TailoringPreviewPanelProps) {
-  const sections = useMemo(
-    () => buildSectionDiffs(originalResumeText, previewResumeText),
-    [originalResumeText, previewResumeText],
-  )
-  const firstChangedIndex = sections.findIndex((s) => s.isChanged)
-  const [activeIndex, setActiveIndex] = useState(Math.max(firstChangedIndex, 0))
-  const activeSection = sections[activeIndex]
+  const sectionGroups = useMemo(() => {
+    const sectionNames = buildSectionNameMap(includedSuggestions)
+    const sectionFallbackOrdinals = buildSectionFallbackOrdinals(includedSuggestions)
+    return groupSuggestionsBySection(includedSuggestions, sectionNames, sectionFallbackOrdinals).map(
+      (group) => ({
+        ...group,
+        hunks: group.suggestions.flatMap((suggestion) =>
+          buildSuggestionDiffHunks(
+            suggestion.current_text,
+            editedTexts[suggestion.suggestion_id] ?? suggestion.suggested_text,
+          ),
+        ),
+      }),
+    )
+  }, [includedSuggestions, editedTexts])
+
+  const [activeIndex, setActiveIndex] = useState(0)
+  const activeSection = sectionGroups[Math.min(activeIndex, sectionGroups.length - 1)]
 
   const newlyIncluded = includedSuggestions.filter((s) => !alreadyAppliedIds.has(s.suggestion_id))
   const previouslyApplied = includedSuggestions.filter((s) => alreadyAppliedIds.has(s.suggestion_id))
@@ -95,10 +131,10 @@ export default function TailoringPreviewPanel({
 
       <div className="rounded-2xl border border-gray-200 bg-white p-6">
         <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
-          Sections ({sections.filter((s) => s.isChanged).length} changed of {sections.length})
+          Sections changed ({sectionGroups.length})
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
-          {sections.map((section, index) => (
+          {sectionGroups.map((section, index) => (
             <button
               key={`${section.sectionId}-${index}`}
               type="button"
@@ -106,20 +142,18 @@ export default function TailoringPreviewPanel({
               className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
                 index === activeIndex
                   ? 'border-indigo-600 bg-indigo-600 text-white'
-                  : section.isChanged
-                    ? 'border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
-                    : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50'
+                  : 'border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
               }`}
             >
-              {section.sectionTitle}
-              {section.isChanged && <Check size={12} aria-hidden="true" />}
+              {section.sectionName}
+              <Check size={12} aria-hidden="true" />
             </button>
           ))}
         </div>
 
         {activeSection && (
           <div className="mt-4">
-            <h3 className="text-sm font-semibold text-gray-900">{activeSection.sectionTitle}</h3>
+            <h3 className="text-sm font-semibold text-gray-900">{activeSection.sectionName}</h3>
             <div className="mt-3 max-h-96 overflow-y-auto">
               <SideBySideDiff
                 hunks={activeSection.hunks}
