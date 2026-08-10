@@ -7,8 +7,8 @@ durable-product-history counterpart to those two, not a replacement for
 them. Same explicit scope boundary: no persistence across a process
 restart, no cross-process sharing. That is acceptable for `memory`, the
 default backend meant for a developer to clone and run with zero database
-configuration — a future `postgres` implementation (a later milestone)
-is what makes this durable across restarts.
+configuration — `PostgresPersistenceStore` (`postgres_store.py`) is what
+makes this durable across restarts, for a process configured to use it.
 
 Every integrity rule the agreed PostgreSQL schema expresses as a
 constraint (foreign keys, `UNIQUE(resume_id, version_number)`, the two
@@ -16,6 +16,15 @@ constraint (foreign keys, `UNIQUE(resume_id, version_number)`, the two
 of which `PersistenceStore` implementation is configured — a caller
 should never be able to construct invalid state against `memory` that
 `postgres` would have rejected, or vice versa.
+
+Every method is `async def`, matching `PersistenceStore` (see its module
+docstring for why) even though nothing here actually awaits anything: a
+dict lookup has no I/O to yield on. This is not a performance-motivated
+choice, only a contract one -- `InMemoryPersistenceStore` and
+`PostgresPersistenceStore` must be interchangeable behind one `await`-able
+interface, and there is deliberately no artificial `asyncio.sleep`,
+executor hop, or lock added here to "simulate" async work -- that would
+misrepresent what this backend actually does.
 """
 
 from datetime import UTC, datetime
@@ -46,22 +55,22 @@ class InMemoryPersistenceStore:
         self._resume_versions: dict[UUID, ResumeVersion] = {}
         self._job_preparations: dict[UUID, JobPreparation] = {}
 
-    def create_resume(self, name: str) -> Resume:
+    async def create_resume(self, name: str) -> Resume:
         now = datetime.now(UTC)
         resume = Resume(id=uuid4(), name=name, created_at=now, updated_at=now)
         self._resumes[resume.id] = resume
         return resume
 
-    def get_resume(self, resume_id: UUID) -> Resume | None:
+    async def get_resume(self, resume_id: UUID) -> Resume | None:
         return self._resumes.get(resume_id)
 
-    def create_resume_version(
+    async def create_resume_version(
         self, resume_id: UUID, content: str, source: ResumeVersionSource
     ) -> ResumeVersion:
         if resume_id not in self._resumes:
             raise ResumeNotFoundError(f"No resume with id {resume_id!r}.")
 
-        existing = self.list_resume_versions(resume_id)
+        existing = await self.list_resume_versions(resume_id)
         next_version_number = existing[-1].version_number + 1 if existing else 1
         is_first_version = next_version_number == 1
         if (source == ResumeVersionSource.ORIGINAL_UPLOAD) != is_first_version:
@@ -82,14 +91,14 @@ class InMemoryPersistenceStore:
         self._resume_versions[version.id] = version
         return version
 
-    def get_resume_version(self, version_id: UUID) -> ResumeVersion | None:
+    async def get_resume_version(self, version_id: UUID) -> ResumeVersion | None:
         return self._resume_versions.get(version_id)
 
-    def list_resume_versions(self, resume_id: UUID) -> list[ResumeVersion]:
+    async def list_resume_versions(self, resume_id: UUID) -> list[ResumeVersion]:
         versions = [v for v in self._resume_versions.values() if v.resume_id == resume_id]
         return sorted(versions, key=lambda v: v.version_number)
 
-    def create_job_preparation(
+    async def create_job_preparation(
         self,
         source_resume_version_id: UUID,
         job_title: str,
@@ -121,10 +130,10 @@ class InMemoryPersistenceStore:
         self._job_preparations[job_preparation.id] = job_preparation
         return job_preparation
 
-    def get_job_preparation(self, job_preparation_id: UUID) -> JobPreparation | None:
+    async def get_job_preparation(self, job_preparation_id: UUID) -> JobPreparation | None:
         return self._job_preparations.get(job_preparation_id)
 
-    def save_job_preparation(self, job_preparation: JobPreparation) -> JobPreparation:
+    async def save_job_preparation(self, job_preparation: JobPreparation) -> JobPreparation:
         current = self._job_preparations.get(job_preparation.id)
         if current is None:
             raise JobPreparationNotFoundError(

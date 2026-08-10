@@ -31,19 +31,17 @@ class Settings(BaseSettings):
     # Persistence backend (Configurable Persistence): `build_persistence_store`
     # (persistence/factory.py) reads this to decide which `PersistenceStore`
     # implementation to construct. `memory` is the default so a fresh clone
-    # runs with zero database configuration; `postgres` names the
-    # PostgreSQL/Neon foundation (SQLAlchemy models + Alembic migrations,
-    # see persistence/db/) established in this milestone -- but
-    # `PostgresPersistenceStore` itself does not exist yet (a later
-    # milestone), so selecting `postgres` still raises `NotImplementedError`
-    # from `build_persistence_store`, not a real connection.
+    # runs with zero database configuration; `postgres` constructs a
+    # `PostgresPersistenceStore` (persistence/postgres_store.py), requiring
+    # `database_url` below. Neither workflows nor API endpoints read from
+    # either store yet (see docs/persistent-backend-workflow-state.md) --
+    # that wiring is a later milestone.
     persistence_backend: Literal["memory", "postgres"] = Field(
         default="memory",
         description=(
             "Which PersistenceStore implementation to use. 'memory' (the default) requires "
-            "no configuration and does not survive a process restart. 'postgres' selects the "
-            "PostgreSQL/Neon backend -- its database foundation (models, migrations) exists, "
-            "but PersistenceStore wiring is a later milestone."
+            "no configuration and does not survive a process restart. 'postgres' persists "
+            "durably via PostgreSQL/Neon and requires database_url below."
         ),
     )
     database_url: str | None = Field(

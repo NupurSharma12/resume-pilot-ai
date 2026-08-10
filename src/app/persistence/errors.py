@@ -54,3 +54,22 @@ class InvalidJobPreparationStatusError(PersistenceError):
     a preparation cannot be marked `completed` without an
     `applied_resume_version_id`.
     """
+
+
+class ConcurrentResumeVersionConflictError(PersistenceError):
+    """Raised when two concurrent `create_resume_version` calls race for the same version number.
+
+    PostgreSQL-only in practice: `InMemoryPersistenceStore` computes "the
+    next version number" and inserts it as one uninterruptible, single-
+    threaded dict mutation (protected by the GIL), so two calls for the
+    same `resume_id` can never observe the same "next" number there. A
+    real database has no such guarantee across two concurrent
+    connections/transactions -- both can read the same current max version
+    before either commits, then both attempt to insert the same
+    `version_number`, which `UNIQUE(resume_id, version_number)` correctly
+    rejects for the second one. `PostgresPersistenceStore` translates that
+    `IntegrityError` into this error rather than letting it leak as a raw
+    SQLAlchemy exception; callers that care about this race should retry
+    the whole `create_resume_version` call, which will observe the
+    now-committed version and compute a fresh, non-conflicting number.
+    """

@@ -1,11 +1,21 @@
-"""The persistence abstraction every backend (in-memory today, PostgreSQL later) must satisfy.
+"""The persistence abstraction every backend (in-memory, PostgreSQL) must satisfy.
 
 `PersistenceStore` is a `typing.Protocol`, the same structural-typing
 choice `app.gateways.llm.gateway.LLMGateway` already makes for provider
-adapters, and for the same reason: a future PostgreSQL-backed
-implementation satisfies this contract by implementing matching method
-signatures, with no shared base class and no dependency from this module
-on any particular database driver or ORM.
+adapters, and for the same reason: `InMemoryPersistenceStore` and
+`PostgresPersistenceStore` each satisfy this contract by implementing
+matching method signatures, with no shared base class and no dependency
+from this module on any particular database driver or ORM.
+
+Every method here is `async def`. This matches the only backend for
+which it's actually load-bearing -- PostgreSQL access is unavoidably
+asynchronous (`asyncpg`; see `app.persistence.db.engine`) -- so a
+FastAPI async endpoint can `await` a `PersistenceStore` call directly,
+regardless of which backend is configured, with no synchronous bridging
+in between. `InMemoryPersistenceStore` has no actual I/O to await (a
+dict lookup completes immediately), but implements the same `async def`
+signatures anyway so both backends satisfy one interface without a
+caller needing to know or care which one it's holding.
 
 Scope is deliberately narrow: exactly the three durable entities agreed
 in the Persistence phase's schema review (`Resume`, `ResumeVersion`,
@@ -39,18 +49,18 @@ from app.persistence.models import JobPreparation, Resume, ResumeVersion, Resume
 class PersistenceStore(Protocol):
     """Structural interface for durable storage of resumes, their versions, and job preparations."""
 
-    def create_resume(self, name: str) -> Resume:
+    async def create_resume(self, name: str) -> Resume:
         """Create and store a new `Resume`.
 
         Always succeeds -- there is no uniqueness constraint on `name`.
         """
         ...
 
-    def get_resume(self, resume_id: UUID) -> Resume | None:
+    async def get_resume(self, resume_id: UUID) -> Resume | None:
         """Return the `Resume` for `resume_id`, or `None` if it doesn't exist (or never did)."""
         ...
 
-    def create_resume_version(
+    async def create_resume_version(
         self, resume_id: UUID, content: str, source: ResumeVersionSource
     ) -> ResumeVersion:
         """Create the next version of `resume_id`'s content.
@@ -68,11 +78,11 @@ class PersistenceStore(Protocol):
         """
         ...
 
-    def get_resume_version(self, version_id: UUID) -> ResumeVersion | None:
+    async def get_resume_version(self, version_id: UUID) -> ResumeVersion | None:
         """Return the `ResumeVersion` for `version_id`, or `None` if it doesn't exist."""
         ...
 
-    def list_resume_versions(self, resume_id: UUID) -> list[ResumeVersion]:
+    async def list_resume_versions(self, resume_id: UUID) -> list[ResumeVersion]:
         """Return every version of `resume_id`, ordered by `version_number` ascending.
 
         Returns an empty list for an unknown `resume_id`, matching this
@@ -83,7 +93,7 @@ class PersistenceStore(Protocol):
         """
         ...
 
-    def create_job_preparation(
+    async def create_job_preparation(
         self,
         source_resume_version_id: UUID,
         job_title: str,
@@ -99,11 +109,11 @@ class PersistenceStore(Protocol):
         """
         ...
 
-    def get_job_preparation(self, job_preparation_id: UUID) -> JobPreparation | None:
+    async def get_job_preparation(self, job_preparation_id: UUID) -> JobPreparation | None:
         """Return the `JobPreparation` for `job_preparation_id`, or `None` if it doesn't exist."""
         ...
 
-    def save_job_preparation(self, job_preparation: JobPreparation) -> JobPreparation:
+    async def save_job_preparation(self, job_preparation: JobPreparation) -> JobPreparation:
         """Persist `job_preparation` as the new current state for its `id`.
 
         The one mutation entry point for a `JobPreparation`: callers read
