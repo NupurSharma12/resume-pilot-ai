@@ -1,17 +1,51 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import TailoringPreviewPanel from './TailoringPreviewPanel'
-import { fixtureSuggestionAppend, fixtureSuggestionInsert } from '../testFixtures'
+import type { TailoringSuggestion } from '../data/tailoringSuggestionsTypes'
 
-const ORIGINAL_TEXT = 'SUMMARY\nBackend engineer.\n\nSKILLS\nPython\nDjango\n\nEXPERIENCE\nBuilt tools.\n'
-const PREVIEW_TEXT = 'SUMMARY\nBackend engineer.\n\nSKILLS\nPython, TypeScript\nDjango\n\nEXPERIENCE\nBuilt tools.\n'
+// Deliberately carries real `Resume: {heading}` evidence, so
+// `buildSectionNameMap` (suggestionPresentation.ts) resolves an actual
+// section name rather than a "Resume Section N" fallback -- exercising
+// the same section-naming path the suggestion review list itself uses.
+const skillsSuggestion: TailoringSuggestion = {
+  suggestion_id: 'suggestion-0',
+  target_section_id: 'section-skills',
+  target_item_id: 'section-skills-item-0',
+  operation: 'append',
+  current_text: 'Python',
+  suggested_text: 'Python, TypeScript',
+  reason: 'TypeScript experience is missing from Skills.',
+  evidence_ids: ['resume-skills-0'],
+  evidence_sources: ['Resume: SKILLS'],
+  confidence: 90,
+  selected_by_default: true,
+  validation_status: 'supported_by_original_resume',
+  validation_issues: [],
+  conflicts_with: [],
+}
+
+const experienceSuggestion: TailoringSuggestion = {
+  suggestion_id: 'suggestion-1',
+  target_section_id: 'section-experience',
+  target_item_id: 'section-experience-item-0',
+  operation: 'insert_after',
+  current_text: null,
+  suggested_text: 'Led a cross-team migration involving 4 engineers.',
+  reason: 'People-management evidence is missing from Experience.',
+  evidence_ids: ['conversation-turn-1'],
+  evidence_sources: ['Conversation Turn 1', 'Resume: EXPERIENCE'],
+  confidence: 85,
+  selected_by_default: true,
+  validation_status: 'supported_by_conversation',
+  validation_issues: [],
+  conflicts_with: [],
+}
 
 function renderPanel(overrides: Partial<Parameters<typeof TailoringPreviewPanel>[0]> = {}) {
   return render(
     <TailoringPreviewPanel
-      originalResumeText={ORIGINAL_TEXT}
-      previewResumeText={PREVIEW_TEXT}
-      includedSuggestions={[fixtureSuggestionAppend]}
+      includedSuggestions={[skillsSuggestion]}
+      editedTexts={{}}
       alreadyAppliedIds={new Set()}
       isApplying={false}
       applyError={null}
@@ -23,43 +57,50 @@ function renderPanel(overrides: Partial<Parameters<typeof TailoringPreviewPanel>
 }
 
 describe('TailoringPreviewPanel', () => {
-  it('supports section-by-section navigation, defaulting to the first changed section', () => {
+  it('builds the diff directly from the suggestion, not a diffed original/preview document', () => {
     renderPanel()
 
-    // SKILLS is the only changed section -- shown by default, as a
-    // side-by-side comparator (Original/Proposed columns).
     expect(screen.getByRole('heading', { name: 'Skills' })).toBeInTheDocument()
     expect(screen.getByText('Original')).toBeInTheDocument()
     expect(screen.getByText('Proposed')).toBeInTheDocument()
     expect(screen.getByText('TypeScript')).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('button', { name: /summary/i }))
-    expect(screen.getByRole('heading', { name: 'Summary' })).toBeInTheDocument()
-    expect(screen.getByText(/no changes in this section/i)).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('button', { name: /experience/i }))
-    expect(screen.getByRole('heading', { name: 'Experience' })).toBeInTheDocument()
-    expect(screen.getByText(/no changes in this section/i)).toBeInTheDocument()
   })
 
-  it('shows only the changed hunk, never the whole resume/section', () => {
-    renderPanel()
+  it('only shows tabs for sections that actually have an included suggestion', () => {
+    renderPanel({ includedSuggestions: [skillsSuggestion, experienceSuggestion] })
 
-    // "Python" -> "Python, TypeScript" is an append: the common prefix
-    // "Python" is shown once, as unchanged context; only "TypeScript" is
-    // marked as an addition. "Django" (unrelated, unchanged) still shows
-    // as nearby context since it's within the default context window.
-    expect(screen.getAllByText('Python').length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: /skills/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /experience/i })).toBeInTheDocument()
+    // No suggestion targets Summary -- unlike the old whole-document diff,
+    // there is nothing to show for it, so no tab is rendered at all.
+    expect(screen.queryByRole('button', { name: /summary/i })).not.toBeInTheDocument()
+  })
+
+  it('switches between sections, each showing only its own suggestions', () => {
+    renderPanel({ includedSuggestions: [skillsSuggestion, experienceSuggestion] })
+
+    expect(screen.getByRole('heading', { name: 'Skills' })).toBeInTheDocument()
     expect(screen.getByText('TypeScript')).toBeInTheDocument()
-    expect(screen.getAllByText('Django').length).toBeGreaterThan(0)
-    // Never the whole original resume dumped into the panel.
-    expect(screen.queryByText(/built tools/i)).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /experience/i }))
+
+    expect(screen.getByRole('heading', { name: 'Experience' })).toBeInTheDocument()
+    // Appears both in the diff cell and the "New in this preview" badge
+    // summary -- getAllByText, not getByText, is expected here.
+    expect(screen.getAllByText(/led a cross-team migration/i).length).toBeGreaterThan(0)
+    expect(screen.queryByText('TypeScript')).not.toBeInTheDocument()
+  })
+
+  it('diffs the edited text, not the original suggested text, once the user has customized it', () => {
+    renderPanel({ editedTexts: { [skillsSuggestion.suggestion_id]: 'Python, TypeScript, and GraphQL' } })
+
+    expect(screen.getByText('TypeScript, and GraphQL')).toBeInTheDocument()
   })
 
   it('lists included suggestions, separating newly selected from already-applied ones', () => {
     renderPanel({
-      includedSuggestions: [fixtureSuggestionAppend, fixtureSuggestionInsert],
-      alreadyAppliedIds: new Set([fixtureSuggestionInsert.suggestion_id]),
+      includedSuggestions: [skillsSuggestion, experienceSuggestion],
+      alreadyAppliedIds: new Set([experienceSuggestion.suggestion_id]),
     })
 
     expect(screen.getByText(/new in this preview/i)).toBeInTheDocument()

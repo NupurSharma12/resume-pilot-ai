@@ -618,11 +618,10 @@ export default function TailoredResumePage() {
               // "Back to Suggestions" is the only way out other than
               // committing.
               <TailoringPreviewPanel
-                originalResumeText={resume?.text ?? ''}
-                previewResumeText={previewResult.final_resume_text}
                 includedSuggestions={tailoringPlan.suggestions.filter((s) =>
                   tailoringSelections.includes(s.suggestion_id),
                 )}
+                editedTexts={tailoringEditedTexts}
                 alreadyAppliedIds={appliedIds}
                 isApplying={isApplying || isRecovering}
                 applyError={applyError || null}
