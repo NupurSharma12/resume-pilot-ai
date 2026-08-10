@@ -1,12 +1,11 @@
 """Resolves the SQLAlchemy connection URL for the configured PostgreSQL database.
 
-Used today only by Alembic's `migrations/env.py`, to connect for running
-migrations. A future `PostgresPersistenceStore` milestone will reuse
-`get_database_url` the same way to construct its own (likely
-pooled/shared) `AsyncEngine` -- that engine's lifecycle management
-(creation once at app startup, disposal at shutdown, pool sizing) is
-deliberately not built here, since nothing in this phase runs application
-queries against PostgreSQL yet.
+Used by Alembic's `migrations/env.py` to connect for running migrations,
+and by `app.persistence.factory.build_persistence_store` to fail fast when
+`persistence_backend="postgres"` is selected without `database_url` set --
+in both cases, just resolving a connection string, never opening a
+connection itself (see `PostgresPersistenceStore`'s own docstring for how
+and when it actually connects).
 """
 
 from app.core.config import Settings

@@ -22,19 +22,19 @@ suite is safe to run repeatedly against the same disposable instance.
 """
 
 import asyncio
-import os
 import uuid
-from pathlib import Path
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import inspect, select, update
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.persistence.db.tables import ResumeRow
-
-TEST_DATABASE_URL = os.environ.get("RESUMEPILOT_TEST_DATABASE_URL")
+from tests.persistence_db_support import (
+    TEST_DATABASE_URL,
+    check_test_database,
+    downgrade_test_database,
+    upgrade_test_database,
+)
 
 pytestmark = pytest.mark.skipif(
     not TEST_DATABASE_URL,
@@ -44,34 +44,26 @@ pytestmark = pytest.mark.skipif(
     ),
 )
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
-def _alembic_config() -> Config:
-    return Config(str(_REPO_ROOT / "alembic.ini"))
-
 
 @pytest.fixture
-def migrated_database(monkeypatch: pytest.MonkeyPatch) -> str:
+def migrated_database() -> str:
     """Run `alembic upgrade head` against `RESUMEPILOT_TEST_DATABASE_URL`, then tear down.
 
-    `env.py` reads `RESUMEPILOT_DATABASE_URL` (via a fresh `Settings()`,
-    not the app's cached `get_settings()` -- see `migrations/env.py`), so
-    this fixture points that variable at the test database only for the
-    duration of the test, via `monkeypatch` -- it's never read from a
-    real `.env`.
+    `upgrade_test_database`/`downgrade_test_database` (see
+    `tests/persistence_db_support.py`) each point `RESUMEPILOT_DATABASE_URL`
+    at the test database only for the duration of their own Alembic call
+    -- never held open for this whole fixture, let alone the test session,
+    which would leak a real-looking value into unrelated tests.
     """
     assert (
         TEST_DATABASE_URL is not None
     )  # narrows for type-checkers; skipif already guarantees this
-    monkeypatch.setenv("RESUMEPILOT_DATABASE_URL", TEST_DATABASE_URL)
 
-    config = _alembic_config()
-    command.upgrade(config, "head")
+    upgrade_test_database()
     try:
         yield TEST_DATABASE_URL
     finally:
-        command.downgrade(config, "base")
+        downgrade_test_database()
 
 
 async def _reflect(url: str) -> dict:
@@ -225,11 +217,9 @@ def test_downgrade_then_upgrade_leaves_no_diff(migrated_database: str) -> None:
     on -- and confirms re-applying `upgrade()` afterward reproduces
     exactly the schema `Base.metadata` describes, with no leftover drift.
     """
-    config = _alembic_config()
-
-    command.downgrade(config, "base")
-    command.upgrade(config, "head")
+    downgrade_test_database()
+    upgrade_test_database()
 
     # No AssertionError/CommandError means autogenerate found no diff
     # between the live (just re-migrated) database and Base.metadata.
-    command.check(config)
+    check_test_database()

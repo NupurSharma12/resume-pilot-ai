@@ -2,8 +2,8 @@
 
 Field-for-field, constraint-for-constraint the agreed schema from the
 Persistence phase's schema review -- see `app.persistence.models` for the
-equivalent Pydantic shapes the (not-yet-implemented) `PostgresPersistenceStore`
-will map these rows onto in a later milestone. Named with a `Row` suffix
+equivalent Pydantic shapes `PostgresPersistenceStore`
+(`app.persistence.postgres_store`) maps these rows onto. Named with a `Row` suffix
 (`ResumeRow`, not `Resume`) specifically to stay visually distinct from
 those Pydantic models at every import site -- this module is the ORM
 mapping only, nothing here is returned to application code today.

@@ -16,11 +16,11 @@ def test_default_settings_wire_an_in_memory_persistence_store() -> None:
     assert isinstance(app.state.persistence_store, InMemoryPersistenceStore)
 
 
-def test_each_app_instance_gets_its_own_persistence_store() -> None:
+async def test_each_app_instance_gets_its_own_persistence_store() -> None:
     first_app = create_app(Settings(gemini_api_key="test-key"))
     second_app = create_app(Settings(gemini_api_key="test-key"))
 
-    resume = first_app.state.persistence_store.create_resume(name="Alice's resume")
+    resume = await first_app.state.persistence_store.create_resume(name="Alice's resume")
 
     assert first_app.state.persistence_store is not second_app.state.persistence_store
-    assert second_app.state.persistence_store.get_resume(resume.id) is None
+    assert await second_app.state.persistence_store.get_resume(resume.id) is None
