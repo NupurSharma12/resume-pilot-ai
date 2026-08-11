@@ -10,6 +10,7 @@
 import { test, expect } from '@playwright/test'
 import { fixtureResumeAnalysis, fixtureTailoringPlan, seedResumeSession } from './fixtures/session'
 import { mockReanalyzeEndpoint, mockReanalyzeFailure } from './helpers/mockPostApply'
+import { mockApplyEndpoint } from './helpers/mockApply'
 import type { ReanalyzeResponse } from '../src/data/postApplyTypes'
 import type { ResumeAnalysisResult } from '../src/data/types'
 
@@ -50,6 +51,89 @@ test.describe('Post-Apply Analysis Loop', () => {
     })
     await page.goto('/tailored-resume')
     await expect(page.getByText('Final Resume Preview')).toBeVisible()
+  })
+
+  test('Download is not available until a re-analysis has actually completed', async ({ page }) => {
+    // The applied resume is on screen, but nothing has been re-analyzed
+    // yet -- Download must not exist at all (not just be disabled/hidden
+    // behind a toggle), per the enforced "Apply -> Re-analyze -> Compare
+    // -> Download" flow (see docs/features/postapply-analysis-loop.md).
+    await expect(page.getByRole('button', { name: /^download txt$/i })).not.toBeVisible()
+
+    const response: ReanalyzeResponse = {
+      after_analysis: withOverallScore(85),
+      comparison: {
+        score_before: 80,
+        score_after: 85,
+        score_delta: 5,
+        status: 'improved',
+        category_comparisons: [],
+        strengths_gained: [],
+        strengths_lost: [],
+        weaknesses_resolved: [],
+        weaknesses_remaining: [],
+        new_weaknesses: [],
+      },
+    }
+    // A real re-analysis can take well over a minute -- delayed here so
+    // the "meaningful progress" loading state is actually observable
+    // before the response resolves, not just a theoretical instant.
+    await mockReanalyzeEndpoint(page, fixtureTailoringPlan.plan_id, response, 300)
+
+    await page.getByRole('button', { name: /re-analyze & compare/i }).click()
+
+    await expect(page.getByText(/re-analyzing your updated resume/i)).toBeVisible()
+    await expect(page.getByRole('button', { name: /^download txt$/i })).not.toBeVisible()
+
+    await expect(page.getByText('Match score improved by 5 points')).toBeVisible()
+    await expect(page.getByText(/re-analyzing your updated resume/i)).not.toBeVisible()
+    await expect(page.getByRole('button', { name: /^download txt$/i })).toBeVisible()
+  })
+
+  test('a failed re-analysis leaves Download unavailable', async ({ page }) => {
+    await expect(page.getByRole('button', { name: /^download txt$/i })).not.toBeVisible()
+
+    await mockReanalyzeFailure(page, fixtureTailoringPlan.plan_id, 'Re-analysis failed.')
+    await page.getByRole('button', { name: /re-analyze & compare/i }).click()
+
+    await expect(
+      page.getByText(/applied successfully, but re-analysis could not be completed/i),
+    ).toBeVisible()
+    await expect(page.getByRole('button', { name: /^download txt$/i })).not.toBeVisible()
+  })
+
+  test('a new apply re-locks Download, even after a prior successful re-analysis', async ({
+    page,
+  }) => {
+    const response: ReanalyzeResponse = {
+      after_analysis: withOverallScore(85),
+      comparison: {
+        score_before: 80,
+        score_after: 85,
+        score_delta: 5,
+        status: 'improved',
+        category_comparisons: [],
+        strengths_gained: [],
+        strengths_lost: [],
+        weaknesses_resolved: [],
+        weaknesses_remaining: [],
+        new_weaknesses: [],
+      },
+    }
+    await mockReanalyzeEndpoint(page, fixtureTailoringPlan.plan_id, response)
+    await page.getByRole('button', { name: /re-analyze & compare/i }).click()
+    await expect(page.getByRole('button', { name: /^download txt$/i })).toBeVisible()
+
+    // Re-apply goes through the same preview-first path as the original
+    // apply (see TailoredResumePage's `attemptApply` docstring).
+    await mockApplyEndpoint(page, fixtureTailoringPlan.plan_id)
+    await page.getByRole('button', { name: /preview changes/i }).click()
+    await expect(page.getByRole('button', { name: /apply now/i })).toBeVisible()
+    await page.getByRole('button', { name: /apply now/i }).click()
+
+    await expect(page.getByText('Final Resume Preview')).toBeVisible()
+    await expect(page.getByRole('button', { name: /^download txt$/i })).not.toBeVisible()
+    await expect(page.getByRole('button', { name: /re-analyze & compare/i })).toBeVisible()
   })
 
   test('score improves: the result is clearly presented as a measurable improvement', async ({
@@ -227,7 +311,10 @@ test.describe('Post-Apply Analysis Loop', () => {
     await expect(page.getByText('Match score improved by 5 points')).toBeVisible()
 
     await mockReanalyzeFailure(page, fixtureTailoringPlan.plan_id, 'Re-analysis failed.')
-    await page.getByRole('button', { name: /re-analyze & compare/i }).click()
+    // A comparison already exists here, so the button now reads "Re-analyze
+    // Again" (see TailoredResumePage.tsx), not the initial "Re-analyze &
+    // Compare".
+    await page.getByRole('button', { name: /re-analyze again/i }).click()
 
     await expect(
       page.getByText(/applied successfully, but re-analysis could not be completed/i),

@@ -5,11 +5,19 @@ import type { Candidate } from '../data/types'
 interface CandidateSummaryCardProps {
   candidate: Candidate
   overallScore: number
+  // True once a Post-Apply Analysis Loop re-analysis has actually
+  // completed (see docs/features/postapply-analysis-loop.md) -- `Sidebar`
+  // passes the re-analyzed `score_after` as `overallScore` once one
+  // exists, so this only ever labels a number that's genuinely different
+  // from (or freshly reconfirmed against) the original analysis, never a
+  // guess about whether tailoring happened.
+  updatedAfterTailoring?: boolean
 }
 
 export default function CandidateSummaryCard({
   candidate,
   overallScore,
+  updatedAfterTailoring = false,
 }: CandidateSummaryCardProps) {
   const matchLabel = getMatchLabel(overallScore)
 
@@ -54,6 +62,9 @@ export default function CandidateSummaryCard({
         <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
         {matchLabel}
       </div>
+      {updatedAfterTailoring && (
+        <p className="mt-1.5 text-[11px] text-gray-400">Updated after tailoring &amp; re-analysis</p>
+      )}
     </div>
   )
 }

@@ -1022,6 +1022,25 @@ describe('TailoredResumePage: stale-plan recovery (backend restart / 404)', () =
 })
 
 describe('TailoredResumePage: download options', () => {
+  // Download only ever renders once a post-apply comparison exists for
+  // the *current* final resume (see "TailoredResumePage: Post-Apply
+  // Analysis Loop gates Download" below for the gating behavior itself)
+  // -- seeded here too so these tests can focus purely on download
+  // mechanics (formats/fidelity/export success/failure) without also
+  // having to re-derive that precondition in every test.
+  const fixturePostApplyComparison = {
+    score_before: 72,
+    score_after: 81,
+    score_delta: 9,
+    status: 'improved' as const,
+    category_comparisons: [],
+    strengths_gained: [],
+    strengths_lost: [],
+    weaknesses_resolved: [],
+    weaknesses_remaining: [],
+    new_weaknesses: [],
+  }
+
   function renderApplied(overrides: Partial<PersistedResumeSession> = {}) {
     return renderPageWithRealSession({
       tailoringPlan: fixtureGenerateSuggestionsResponse,
@@ -1032,9 +1051,30 @@ describe('TailoredResumePage: download options', () => {
         appliedSuggestionIds: fixtureApplySuggestionsResponse.applied_suggestion_ids,
       },
       tailoringValidationReport: fixtureApplySuggestionsResponse.final_validation,
+      postApplyAnalysis: fixtureResumeAnalysis,
+      postApplyComparison: fixturePostApplyComparison,
       ...overrides,
     })
   }
+
+  it('does not show Download at all until a post-apply re-analysis has completed', () => {
+    renderPageWithRealSession({
+      tailoringPlan: fixtureGenerateSuggestionsResponse,
+      tailoringSelections: ['suggestion-0'],
+      tailoringAvailableExportFormats: fixtureGenerateSuggestionsResponse.available_export_formats,
+      finalTailoredResume: {
+        finalResumeText: fixtureApplySuggestionsResponse.final_resume_text,
+        appliedSuggestionIds: fixtureApplySuggestionsResponse.applied_suggestion_ids,
+      },
+      tailoringValidationReport: fixtureApplySuggestionsResponse.final_validation,
+      // No postApplyComparison seeded -- the applied resume is shown, but
+      // nothing has been re-analyzed yet.
+    })
+
+    expect(screen.getByText(/final resume preview/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^download txt$/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /re-analyze & compare/i })).toBeInTheDocument()
+  })
 
   it('only shows formats the backend reported as available, and marks the default', () => {
     renderApplied({
@@ -1211,6 +1251,138 @@ describe('TailoredResumePage: Post-Apply Analysis Loop', () => {
     await waitFor(() => expect(screen.getByText(/decreased by 4 points/i)).toBeInTheDocument())
     expect(screen.queryByText(/re-analysis could not be completed/i)).not.toBeInTheDocument()
   })
+
+  it('hides Download until re-analysis succeeds, then shows it once a comparison exists', async () => {
+    mockedPostApplyApi.reanalyzeAfterApply.mockResolvedValue({
+      after_analysis: fixtureResumeAnalysis,
+      comparison: {
+        score_before: 72,
+        score_after: 81,
+        score_delta: 9,
+        status: 'improved',
+        category_comparisons: [],
+        strengths_gained: [],
+        strengths_lost: [],
+        weaknesses_resolved: [],
+        weaknesses_remaining: [],
+        new_weaknesses: [],
+      },
+    })
+    renderApplied()
+
+    expect(screen.queryByRole('button', { name: /^download txt$/i })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /re-analyze & compare/i }))
+
+    await waitFor(() => expect(screen.getByText(/improved by 9 points/i)).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /^download txt$/i })).toBeInTheDocument()
+  })
+
+  it('keeps Download hidden after a failed re-analysis -- no comparison, no download', async () => {
+    mockedPostApplyApi.reanalyzeAfterApply.mockRejectedValue(
+      new ApiError('Could not reach the re-analysis service.'),
+    )
+    renderApplied()
+
+    fireEvent.click(screen.getByRole('button', { name: /re-analyze & compare/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText(/re-analysis could not be completed/i)).toBeInTheDocument(),
+    )
+    expect(screen.queryByRole('button', { name: /^download txt$/i })).not.toBeInTheDocument()
+  })
+
+  it('shows a meaningful progress indicator while re-analysis is running, not just a disabled button', async () => {
+    let resolveReanalyze: (value: Awaited<ReturnType<typeof mockedPostApplyApi.reanalyzeAfterApply>>) => void =
+      () => {}
+    mockedPostApplyApi.reanalyzeAfterApply.mockReturnValue(
+      new Promise((resolve) => {
+        resolveReanalyze = resolve
+      }),
+    )
+    renderApplied()
+
+    fireEvent.click(screen.getByRole('button', { name: /re-analyze & compare/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText(/re-analyzing your updated resume/i)).toBeInTheDocument(),
+    )
+    expect(screen.queryByRole('button', { name: /^download txt$/i })).not.toBeInTheDocument()
+
+    resolveReanalyze({
+      after_analysis: fixtureResumeAnalysis,
+      comparison: {
+        score_before: 72,
+        score_after: 81,
+        score_delta: 9,
+        status: 'improved',
+        category_comparisons: [],
+        strengths_gained: [],
+        strengths_lost: [],
+        weaknesses_resolved: [],
+        weaknesses_remaining: [],
+        new_weaknesses: [],
+      },
+    })
+
+    await waitFor(() => expect(screen.getByText(/improved by 9 points/i)).toBeInTheDocument())
+    expect(screen.queryByText(/re-analyzing your updated resume/i)).not.toBeInTheDocument()
+  })
+
+  it('re-locks Download after a new apply, even if a prior re-analysis had unlocked it', async () => {
+    mockedPostApplyApi.reanalyzeAfterApply.mockResolvedValue({
+      after_analysis: fixtureResumeAnalysis,
+      comparison: {
+        score_before: 72,
+        score_after: 81,
+        score_delta: 9,
+        status: 'improved',
+        category_comparisons: [],
+        strengths_gained: [],
+        strengths_lost: [],
+        weaknesses_resolved: [],
+        weaknesses_remaining: [],
+        new_weaknesses: [],
+      },
+    })
+    renderApplied({
+      finalTailoredResume: {
+        finalResumeText: fixtureApplySuggestionsResponse.final_resume_text,
+        appliedSuggestionIds: fixtureApplySuggestionsResponse.applied_suggestion_ids,
+      },
+      postApplyAnalysis: fixtureResumeAnalysis,
+      postApplyComparison: {
+        score_before: 72,
+        score_after: 81,
+        score_delta: 9,
+        status: 'improved',
+        category_comparisons: [],
+        strengths_gained: [],
+        strengths_lost: [],
+        weaknesses_resolved: [],
+        weaknesses_remaining: [],
+        new_weaknesses: [],
+      },
+    })
+
+    expect(screen.getByRole('button', { name: /^download txt$/i })).toBeInTheDocument()
+
+    // Re-apply goes through the same preview-first path as the first
+    // apply (see `attemptApply`'s docstring) -- "Preview Changes" then
+    // "Apply Now" from within the preview panel, not a direct action from
+    // the suggestions list.
+    mockedTailoringApi.applyTailoringSuggestions.mockResolvedValue(fixtureApplySuggestionsResponse)
+    fireEvent.click(screen.getByRole('button', { name: /preview changes/i }))
+    await waitFor(() => expect(mockedTailoringApi.applyTailoringSuggestions).toHaveBeenCalled())
+    const applyNowButton = await screen.findByRole('button', { name: /apply now/i })
+    fireEvent.click(applyNowButton)
+
+    await waitFor(() =>
+      expect(mockedTailoringApi.applyTailoringSuggestions).toHaveBeenCalledTimes(2),
+    )
+    expect(screen.queryByRole('button', { name: /^download txt$/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /re-analyze & compare/i })).toBeInTheDocument()
+  })
 })
 
 describe('TailoredResumePage: refresh restores state', () => {
@@ -1235,6 +1407,19 @@ describe('TailoredResumePage: refresh restores state', () => {
         appliedSuggestionIds: fixtureApplySuggestionsResponse.applied_suggestion_ids,
       },
       tailoringValidationReport: fixtureApplySuggestionsResponse.final_validation,
+      postApplyAnalysis: fixtureResumeAnalysis,
+      postApplyComparison: {
+        score_before: 72,
+        score_after: 81,
+        score_delta: 9,
+        status: 'improved',
+        category_comparisons: [],
+        strengths_gained: [],
+        strengths_lost: [],
+        weaknesses_resolved: [],
+        weaknesses_remaining: [],
+        new_weaknesses: [],
+      },
     })
 
     expect(screen.getByText((_, el) => el?.tagName === 'PRE' && el.textContent === fixtureApplySuggestionsResponse.final_resume_text)).toBeInTheDocument()

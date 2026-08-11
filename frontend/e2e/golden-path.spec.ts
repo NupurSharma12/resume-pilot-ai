@@ -84,6 +84,14 @@ test.describe('Golden path: upload through download', () => {
       await expect(page.getByText('Applied').first()).toBeVisible()
     })
 
+    await test.step('Download is not offered until the applied resume has been re-analyzed', async () => {
+      // The core enforced UX this test exists to prove: Apply alone is
+      // never enough to unlock Download -- see docs/features/postapply-
+      // analysis-loop.md's "Download is gated on re-analysis".
+      await expect(page.getByRole('button', { name: /^download txt$/i })).not.toBeVisible()
+      await expect(page.getByRole('button', { name: 'Re-analyze & Compare' })).toBeVisible()
+    })
+
     await test.step('re-analyze the applied resume and verify a truthful comparison', async () => {
       // Reads the real backend response rather than mocking it -- this
       // is the one live-only assertion source of truth for what the LLM
@@ -95,6 +103,13 @@ test.describe('Golden path: upload through download', () => {
         { timeout: 120_000 },
       )
       await page.getByRole('button', { name: 'Re-analyze & Compare' }).click()
+
+      // A real re-analysis call can take a good while -- confirm the
+      // "meaningful progress" state (not just a disabled/relabeled
+      // button) is what the candidate actually sees during that wait.
+      await expect(page.getByText(/re-analyzing your updated resume/i)).toBeVisible()
+      await expect(page.getByRole('button', { name: /^download txt$/i })).not.toBeVisible()
+
       const reanalyzeResponse = await reanalyzeResponsePromise
       expect(reanalyzeResponse.ok()).toBe(true)
       const body = (await reanalyzeResponse.json()) as ReanalyzeResponse
@@ -150,6 +165,11 @@ test.describe('Golden path: upload through download', () => {
       // badge in PostApplyComparisonCard -- the two numbers render as
       // adjacent text nodes around an arrow icon with no separator).
       await expect(page.getByText(`${score_before}${score_after}`)).toBeVisible()
+
+      // The progress state is gone and Download is now available -- the
+      // comparison landing is what unlocks it.
+      await expect(page.getByText(/re-analyzing your updated resume/i)).not.toBeVisible()
+      await expect(page.getByRole('button', { name: /^download txt$/i })).toBeVisible()
     })
 
     await test.step('download the final resume', async () => {

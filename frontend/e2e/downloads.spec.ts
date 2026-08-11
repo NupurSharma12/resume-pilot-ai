@@ -29,6 +29,17 @@ test.describe('Downloads', () => {
     await page.getByRole('button', { name: 'Apply Now' }).click()
     await expect(page.getByText('Final Resume Preview')).toBeVisible({ timeout: 30_000 })
 
+    // Download only renders once a re-analysis has completed for this
+    // final resume (see docs/features/postapply-analysis-loop.md's
+    // "Download is gated on re-analysis") -- a real re-analysis call, so
+    // this can take a while, same as the earlier real LLM calls in
+    // `runFullFlowThroughGeneratedPlan`.
+    await page.getByRole('button', { name: 'Re-analyze & Compare' }).click()
+    await expect(page.getByText(/re-analyzing your updated resume/i)).toBeVisible()
+    await expect(page.getByText(/re-analyzing your updated resume/i)).not.toBeVisible({
+      timeout: 120_000,
+    })
+
     const downloadButtons = page.getByRole('button', { name: /^download (txt|markdown|docx|pdf)$/i })
     const availableCount = await downloadButtons.count()
     expect(availableCount).toBeGreaterThan(0)
@@ -79,6 +90,13 @@ test.describe('Downloads', () => {
     await page.getByRole('button', { name: 'Preview Changes' }).click()
     await page.getByRole('button', { name: 'Apply Now' }).click()
     await expect(page.getByText('Final Resume Preview')).toBeVisible({ timeout: 30_000 })
+
+    // Download only renders once a re-analysis has completed (see the
+    // first test in this file for the full rationale).
+    await page.getByRole('button', { name: 'Re-analyze & Compare' }).click()
+    await expect(page.getByText(/re-analyzing your updated resume/i)).not.toBeVisible({
+      timeout: 120_000,
+    })
 
     await page.route('**/v1/tailoring-suggestions/**/export', async (route) => {
       await route.fulfill({ status: 500, json: { detail: 'Exporting the resume failed.' } })

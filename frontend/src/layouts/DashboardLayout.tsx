@@ -45,6 +45,7 @@ export default function DashboardLayout() {
     setJobDescription,
     status,
     setStatus,
+    postApplyComparison,
   } = useResumeSession()
   const [errorMessage, setErrorMessage] = useState('')
   const [isInputCollapsed, setIsInputCollapsed] = useState(false)
@@ -82,7 +83,7 @@ export default function DashboardLayout() {
 
   return (
     <div className="flex h-screen bg-[#f7f8fa]">
-      <Sidebar resumeAnalysis={resumeAnalysis} />
+      <Sidebar resumeAnalysis={resumeAnalysis} postApplyComparison={postApplyComparison} />
       <main className="flex-1 overflow-y-auto">
         <Outlet
           context={
