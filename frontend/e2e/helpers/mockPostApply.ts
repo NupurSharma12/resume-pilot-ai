@@ -14,10 +14,18 @@ export async function mockReanalyzeEndpoint(
   page: Page,
   planId: string,
   response: ReanalyzeResponse,
+  // Optional artificial delay (ms) before fulfilling -- lets a spec
+  // deterministically assert the "meaningful progress" loading state
+  // (see TailoredResumePage.tsx) actually renders before the response
+  // resolves, without racing a real, variable-latency re-analysis call.
+  delayMs = 0,
 ): Promise<void> {
   await page.route(
     `${API_BASE_URL}/v1/tailoring-suggestions/${planId}/reanalyze`,
     async (route) => {
+      if (delayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs))
+      }
       await route.fulfill({ json: response })
     },
   )

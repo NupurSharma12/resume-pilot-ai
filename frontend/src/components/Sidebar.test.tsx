@@ -3,15 +3,37 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import { fixtureResumeAnalysis } from '../testFixtures'
+import type { ResumeAnalysisComparison } from '../data/postApplyTypes'
 
-function renderSidebar(resumeAnalysis: typeof fixtureResumeAnalysis | null) {
+function renderSidebar(
+  resumeAnalysis: typeof fixtureResumeAnalysis | null,
+  postApplyComparison: ResumeAnalysisComparison | null = null,
+) {
   return render(
     <MemoryRouter initialEntries={['/']}>
       <Routes>
-        <Route path="/" element={<Sidebar resumeAnalysis={resumeAnalysis} />} />
+        <Route
+          path="/"
+          element={
+            <Sidebar resumeAnalysis={resumeAnalysis} postApplyComparison={postApplyComparison} />
+          }
+        />
       </Routes>
     </MemoryRouter>,
   )
+}
+
+const fixtureComparison: ResumeAnalysisComparison = {
+  score_before: fixtureResumeAnalysis.overall_assessment.overall_score,
+  score_after: 91,
+  score_delta: 91 - fixtureResumeAnalysis.overall_assessment.overall_score,
+  status: 'improved',
+  category_comparisons: [],
+  strengths_gained: [],
+  strengths_lost: [],
+  weaknesses_resolved: [],
+  weaknesses_remaining: [],
+  new_weaknesses: [],
 }
 
 describe('Sidebar Tailored Resume nav item', () => {
@@ -28,7 +50,10 @@ describe('Sidebar Tailored Resume nav item', () => {
     render(
       <MemoryRouter initialEntries={['/']}>
         <Routes>
-          <Route path="/" element={<Sidebar resumeAnalysis={fixtureResumeAnalysis} />} />
+          <Route
+            path="/"
+            element={<Sidebar resumeAnalysis={fixtureResumeAnalysis} postApplyComparison={null} />}
+          />
           <Route path="/tailored-resume" element={<div>Tailored Resume Page</div>} />
         </Routes>
       </MemoryRouter>,
@@ -46,5 +71,26 @@ describe('Sidebar Tailored Resume nav item', () => {
     renderSidebar(null)
 
     expect(screen.queryByText('SOON')).not.toBeInTheDocument()
+  })
+})
+
+describe('Sidebar candidate score', () => {
+  it('shows the original analysis score when there is no post-apply comparison yet', () => {
+    renderSidebar(fixtureResumeAnalysis, null)
+
+    expect(
+      screen.getByText(`${fixtureResumeAnalysis.overall_assessment.overall_score}%`),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/updated after tailoring/i)).not.toBeInTheDocument()
+  })
+
+  it('shows the re-analyzed score, with an "updated" note, once a post-apply comparison exists', () => {
+    renderSidebar(fixtureResumeAnalysis, fixtureComparison)
+
+    expect(screen.getByText(`${fixtureComparison.score_after}%`)).toBeInTheDocument()
+    expect(
+      screen.queryByText(`${fixtureResumeAnalysis.overall_assessment.overall_score}%`),
+    ).not.toBeInTheDocument()
+    expect(screen.getByText(/updated after tailoring/i)).toBeInTheDocument()
   })
 })

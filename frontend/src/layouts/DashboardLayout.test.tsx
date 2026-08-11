@@ -123,4 +123,32 @@ describe('DashboardLayout hydration gating', () => {
 
     expect(screen.queryByText('CURRENT CANDIDATE')).not.toBeInTheDocument()
   })
+
+  it('passes the post-apply comparison through to the Sidebar, so it shows the re-analyzed score', () => {
+    mockedUseResumeSession.mockReturnValue(
+      makeResumeSessionValue({
+        hydrationStatus: 'hydrated',
+        resumeAnalysis: fixtureResumeAnalysis,
+        postApplyComparison: {
+          score_before: fixtureResumeAnalysis.overall_assessment.overall_score,
+          score_after: 91,
+          score_delta: 91 - fixtureResumeAnalysis.overall_assessment.overall_score,
+          status: 'improved',
+          category_comparisons: [],
+          strengths_gained: [],
+          strengths_lost: [],
+          weaknesses_resolved: [],
+          weaknesses_remaining: [],
+          new_weaknesses: [],
+        },
+      }),
+    )
+
+    renderLayout()
+
+    expect(screen.getByText('91%')).toBeInTheDocument()
+    expect(
+      screen.queryByText(`${fixtureResumeAnalysis.overall_assessment.overall_score}%`),
+    ).not.toBeInTheDocument()
+  })
 })

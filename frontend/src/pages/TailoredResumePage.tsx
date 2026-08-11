@@ -286,8 +286,26 @@ export default function TailoredResumePage() {
       setTailoringValidationReport(result.final_validation)
       setIsPreviewOpen(false)
       setPreviewResult(null)
+      // A new commit supersedes whatever final resume any earlier
+      // post-apply comparison was measuring -- see docs/features/
+      // postapply-analysis-loop.md's "Download requires re-analyzing the
+      // *current* final resume" requirement. Re-locking here, on every
+      // successful commit (not just the first), is what makes that
+      // requirement hold after a second/third phased apply too: without
+      // this, a comparison from an earlier phase would keep Download
+      // unlocked for a resume that itself was never actually re-analyzed.
+      setPostApplyAnalysis(null)
+      setPostApplyComparison(null)
+      setPostApplyAnalysisStatus('idle')
+      setReanalyzeError('')
     },
-    [setFinalTailoredResume, setTailoringValidationReport],
+    [
+      setFinalTailoredResume,
+      setTailoringValidationReport,
+      setPostApplyAnalysis,
+      setPostApplyComparison,
+      setPostApplyAnalysisStatus,
+    ],
   )
 
   // Shared by both the direct-failure path (handleApply's own catch) and
@@ -771,7 +789,17 @@ export default function TailoredResumePage() {
                   )}
                 </div>
 
-                {/* Stage 4: Final Resume */}
+                {/* Stage 4: Final Resume -> Re-analyze -> Compare -> Download.
+                    A strict, enforced order (see docs/features/postapply-
+                    analysis-loop.md's "Download is gated on re-analysis"):
+                    the updated resume is shown immediately, but Download
+                    itself does not render at all until a real comparison
+                    exists for *this* final resume -- there is no disabled/
+                    ghost download button, it simply isn't part of the page
+                    yet. `attemptApply` resets `postApplyComparison` to null
+                    on every new commit, so a second/third phased apply
+                    re-locks Download until re-analyzed again, the same way
+                    the first apply does. */}
                 {finalTailoredResume && tailoringValidationReport && (
                   <>
                     <TailoringFinalResumeCard
@@ -783,50 +811,63 @@ export default function TailoredResumePage() {
                       sectionFallbackOrdinals={sectionFallbackOrdinals}
                       onContinueEditing={scrollToSuggestions}
                     />
-                    {availableFormats.length > 0 && (
-                      <TailoringDownloadPanel
-                        availableFormats={availableFormats}
-                        defaultFormat={tailoringPlan.default_export_format}
-                        sourceFormat={tailoringSourceFormat}
-                        exportingFormat={exportingFormat}
-                        exportError={exportError || null}
-                        onDownload={handleDownload}
-                      />
-                    )}
 
                     {/* Stage 5: Post-Apply Analysis Loop -- see
-                        docs/features/postapply-analysis-loop.md. */}
-                    <div className="rounded-2xl border border-gray-200 bg-white p-6">
-                      <div className="flex flex-wrap items-center justify-between gap-4">
-                        <div>
-                          <h3 className="font-semibold text-gray-900">How much did this help?</h3>
-                          <p className="mt-1 text-sm text-gray-500">
-                            Re-analyze your updated resume against the same job description to see
-                            whether the applied changes actually improved your match.
-                          </p>
+                        docs/features/postapply-analysis-loop.md. While a
+                        re-analysis is in flight, this replaces itself with
+                        a section-level loading state (the same pattern
+                        "Generating tailoring suggestions…" uses above) --
+                        real re-analysis calls can take well over a minute,
+                        so a mere button-label swap is not "meaningful
+                        progress" for a wait that long. */}
+                    {postApplyAnalysisStatus === 'reanalyzing' ? (
+                      <ConversationLoadingState message="Re-analyzing your updated resume against the job description…" />
+                    ) : (
+                      <div className="rounded-2xl border border-gray-200 bg-white p-6">
+                        <div className="flex flex-wrap items-center justify-between gap-4">
+                          <div>
+                            <h3 className="font-semibold text-gray-900">How much did this help?</h3>
+                            <p className="mt-1 text-sm text-gray-500">
+                              Re-analyze your updated resume against the same job description to see
+                              whether the applied changes actually improved your match --
+                              {postApplyComparison
+                                ? ' your download stays available below.'
+                                : ' this unlocks your download.'}
+                            </p>
+                          </div>
+                          <Button
+                            variant="outline"
+                            icon={<BarChart2 size={16} />}
+                            onClick={handleReanalyze}
+                          >
+                            {postApplyComparison ? 'Re-analyze Again' : 'Re-analyze & Compare'}
+                          </Button>
                         </div>
-                        <Button
-                          variant="outline"
-                          icon={<BarChart2 size={16} />}
-                          disabled={postApplyAnalysisStatus === 'reanalyzing'}
-                          onClick={handleReanalyze}
-                        >
-                          {postApplyAnalysisStatus === 'reanalyzing'
-                            ? 'Re-analyzing…'
-                            : 'Re-analyze & Compare'}
-                        </Button>
+                        {postApplyAnalysisStatus === 'error' && reanalyzeError && (
+                          <div className="mt-4 rounded-xl border border-amber-100 bg-amber-50/60 p-4">
+                            <p className="text-sm text-amber-700">
+                              Your resume changes were applied successfully, but re-analysis could
+                              not be completed, so improvement could not be measured: {reanalyzeError}
+                            </p>
+                          </div>
+                        )}
                       </div>
-                      {postApplyAnalysisStatus === 'error' && reanalyzeError && (
-                        <div className="mt-4 rounded-xl border border-amber-100 bg-amber-50/60 p-4">
-                          <p className="text-sm text-amber-700">
-                            Your resume changes were applied successfully, but re-analysis could
-                            not be completed, so improvement could not be measured: {reanalyzeError}
-                          </p>
-                        </div>
-                      )}
-                    </div>
+                    )}
+
                     {postApplyComparison && (
-                      <PostApplyComparisonCard comparison={postApplyComparison} />
+                      <>
+                        <PostApplyComparisonCard comparison={postApplyComparison} />
+                        {availableFormats.length > 0 && (
+                          <TailoringDownloadPanel
+                            availableFormats={availableFormats}
+                            defaultFormat={tailoringPlan.default_export_format}
+                            sourceFormat={tailoringSourceFormat}
+                            exportingFormat={exportingFormat}
+                            exportError={exportError || null}
+                            onDownload={handleDownload}
+                          />
+                        )}
+                      </>
                     )}
                   </>
                 )}

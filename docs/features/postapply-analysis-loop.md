@@ -2,7 +2,7 @@ Post-Apply Analysis Loop
 
 Status
 
-Planned
+Implemented
 
 Purpose
 
@@ -47,6 +47,20 @@ Re-Analysis
 Before / After Comparison
     ↓
 Continue Editing or Download
+
+Download is gated on re-analysis
+
+This is enforced by the application, not just a suggested order of steps.
+
+After Apply, the updated resume is shown immediately, but the Download panel does not render at all -- there is no disabled or ghost download button. It only appears once a re-analysis has actually completed for the current final resume and produced a before/after comparison.
+
+While the re-analysis is running, the page shows a section-level "Re-analyzing your updated resume against the job description…" loading state, not just a relabeled button -- a real re-analysis can take well over a minute, and a button-label swap alone is not meaningful progress for a wait that long.
+
+If a re-analysis fails, Download stays unavailable. The applied resume itself is unaffected, and the user can retry "Re-analyze & Compare" (relabeled "Re-analyze Again" once a comparison already exists).
+
+If the user applies again -- including a later phase of Apply on top of an already-applied resume -- the existing comparison is discarded and Download is re-locked until the newly applied resume is re-analyzed. A stale comparison from a previous version of the resume is never allowed to keep Download unlocked.
+
+The left panel's "Overall Match" score follows the same rule: it shows the original pre-tailoring score until a re-analysis completes, then shows the re-analyzed score (with a small "Updated after tailoring & re-analysis" note) instead. The original analysis itself is never overwritten -- it remains the fixed "before" baseline for the lifetime of the session, and the re-analyzed score is tracked and displayed separately.
 
 Inputs
 

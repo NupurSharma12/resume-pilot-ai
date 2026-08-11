@@ -11,6 +11,7 @@ import { Link, useLocation } from 'react-router-dom'
 import CandidateSummaryCard from './CandidateSummaryCard'
 import { candidate } from '../data/mockData'
 import type { ResumeAnalysisResult } from '../data/types'
+import type { ResumeAnalysisComparison } from '../data/postApplyTypes'
 
 const NAV_ITEMS = [
   { id: 'resume', label: 'Resume', icon: FileText, path: '/resume' },
@@ -23,9 +24,19 @@ const NAV_ITEMS = [
 
 interface SidebarProps {
   resumeAnalysis: ResumeAnalysisResult | null
+  // The Post-Apply Analysis Loop's latest comparison, if a re-analysis has
+  // completed (see docs/features/postapply-analysis-loop.md) -- `null`
+  // covers both "never re-analyzed" and "a new apply since re-analyzing
+  // superseded it" (see TailoredResumePage's `attemptApply`, which resets
+  // this on every commit). Deliberately a *separate* prop from
+  // `resumeAnalysis`, never merged into it: `resumeAnalysis` stays the
+  // fixed "before" baseline every comparison measures against for the
+  // lifetime of the session, so this sidebar can show the latest known
+  // score without that baseline ever being overwritten.
+  postApplyComparison: ResumeAnalysisComparison | null
 }
 
-export default function Sidebar({ resumeAnalysis }: SidebarProps) {
+export default function Sidebar({ resumeAnalysis, postApplyComparison }: SidebarProps) {
   const location = useLocation()
 
   return (
@@ -81,7 +92,10 @@ export default function Sidebar({ resumeAnalysis }: SidebarProps) {
         <div className="mt-auto p-4">
           <CandidateSummaryCard
             candidate={candidate}
-            overallScore={resumeAnalysis.overall_assessment.overall_score}
+            overallScore={
+              postApplyComparison?.score_after ?? resumeAnalysis.overall_assessment.overall_score
+            }
+            updatedAfterTailoring={postApplyComparison !== null}
           />
         </div>
       )}
