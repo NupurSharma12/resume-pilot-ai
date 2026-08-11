@@ -7,21 +7,21 @@
 # Test info
 
 - Name: golden-path.spec.ts >> Golden path: upload through download >> a candidate can go from resume upload to a downloaded tailored resume
-- Location: e2e/golden-path.spec.ts:24:3
+- Location: e2e/golden-path.spec.ts:43:3
 
 # Error details
 
 ```
 Error: expect(locator).toBeVisible() failed
 
-Locator: getByPlaceholder('Share your answer…')
+Locator: getByRole('heading', { name: 'Review Suggestions' })
 Expected: visible
-Timeout: 45000ms
+Timeout: 120000ms
 Error: element(s) not found
 
 Call log:
-  - Expect "toBeVisible" with timeout 45000ms
-  - waiting for getByPlaceholder('Share your answer…')
+  - Expect "toBeVisible" with timeout 120000ms
+  - waiting for getByRole('heading', { name: 'Review Suggestions' })
 
 ```
 
@@ -44,13 +44,12 @@ Call log:
   - paragraph: CURRENT CANDIDATE
   - text: NS
   - paragraph: Nupur Sharma
-  - text: Adobe 13 yrs Overall Match 0% Weak Match
+  - text: Adobe 13 yrs Overall Match 35% Weak Match
 - main:
-  - heading "Career Conversation" [level=1]
-  - paragraph: A recruiter-style conversation to recover missing evidence for this role
-  - heading "Conversation didn't load" [level=2]
-  - paragraph: Could not reach the conversation service. Is the backend running?
-  - button "Try Again"
+  - heading "Tailored Resume" [level=1]
+  - paragraph: Small, evidence-backed edits you review and approve -- never an automatic rewrite
+  - progressbar "Analyzing"
+  - paragraph: Generating tailoring suggestions…
 - button "Help"
 ```
 
@@ -114,8 +113,7 @@ Call log:
   55  |     if (await completeHeading.isVisible().catch(() => false)) return
   56  | 
   57  |     const answerBox = page.getByPlaceholder('Share your answer…')
-> 58  |     await expect(answerBox).toBeVisible({ timeout: 45_000 })
-      |                             ^ Error: expect(locator).toBeVisible() failed
+  58  |     await expect(answerBox).toBeVisible({ timeout: 45_000 })
   59  |     await answerBox.fill(
   60  |       'I led a team of 4 engineers migrating a legacy billing system to a new stack, ' +
   61  |         'mentoring two junior engineers along the way and coordinating with product and design.',
@@ -150,7 +148,8 @@ Call log:
   90  |   // call per suggestion -- see TailoringSuggestionWorkflow), genuinely
   91  |   // slower than a single LLM round trip; a generous timeout here reflects
   92  |   // that real cost, not a bug in the wait itself.
-  93  |   await expect(page.getByRole('heading', { name: 'Review Suggestions' })).toBeVisible({
+> 93  |   await expect(page.getByRole('heading', { name: 'Review Suggestions' })).toBeVisible({
+      |                                                                           ^ Error: expect(locator).toBeVisible() failed
   94  |     timeout: 120_000,
   95  |   })
   96  |   await expect(page.getByRole('checkbox').first()).toBeVisible()
