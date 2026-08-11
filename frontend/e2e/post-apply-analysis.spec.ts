@@ -102,10 +102,10 @@ test.describe('Post-Apply Analysis Loop', () => {
     await expect(page.getByRole('button', { name: /^download txt$/i })).not.toBeVisible()
   })
 
-  test('a new apply re-locks Download, even after a prior successful re-analysis', async ({
+  test('a new apply re-locks Download, then a fresh re-analysis unlocks it again with a new comparison', async ({
     page,
   }) => {
-    const response: ReanalyzeResponse = {
+    const firstResponse: ReanalyzeResponse = {
       after_analysis: withOverallScore(85),
       comparison: {
         score_before: 80,
@@ -120,20 +120,57 @@ test.describe('Post-Apply Analysis Loop', () => {
         new_weaknesses: [],
       },
     }
-    await mockReanalyzeEndpoint(page, fixtureTailoringPlan.plan_id, response)
-    await page.getByRole('button', { name: /re-analyze & compare/i }).click()
-    await expect(page.getByRole('button', { name: /^download txt$/i })).toBeVisible()
 
-    // Re-apply goes through the same preview-first path as the original
-    // apply (see TailoredResumePage's `attemptApply` docstring).
-    await mockApplyEndpoint(page, fixtureTailoringPlan.plan_id)
-    await page.getByRole('button', { name: /preview changes/i }).click()
-    await expect(page.getByRole('button', { name: /apply now/i })).toBeVisible()
-    await page.getByRole('button', { name: /apply now/i }).click()
+    await test.step('apply, re-analyze, and confirm Download unlocks', async () => {
+      await mockReanalyzeEndpoint(page, fixtureTailoringPlan.plan_id, firstResponse)
+      await page.getByRole('button', { name: /re-analyze & compare/i }).click()
+      await expect(page.getByText('Match score improved by 5 points')).toBeVisible()
+      await expect(page.getByText(scoreBadgeText(80, 85))).toBeVisible()
+      await expect(page.getByRole('button', { name: /^download txt$/i })).toBeVisible()
+    })
 
-    await expect(page.getByText('Final Resume Preview')).toBeVisible()
-    await expect(page.getByRole('button', { name: /^download txt$/i })).not.toBeVisible()
-    await expect(page.getByRole('button', { name: /re-analyze & compare/i })).toBeVisible()
+    await test.step('re-apply clears the old comparison and re-locks Download', async () => {
+      // Re-apply goes through the same preview-first path as the
+      // original apply (see TailoredResumePage's `attemptApply`
+      // docstring).
+      await mockApplyEndpoint(page, fixtureTailoringPlan.plan_id)
+      await page.getByRole('button', { name: /preview changes/i }).click()
+      await expect(page.getByRole('button', { name: /apply now/i })).toBeVisible()
+      await page.getByRole('button', { name: /apply now/i }).click()
+
+      await expect(page.getByText('Final Resume Preview')).toBeVisible()
+      // The prior comparison itself is gone, not just the download
+      // button -- a stale comparison must never keep Download unlocked.
+      await expect(page.getByText('Match score improved by 5 points')).not.toBeVisible()
+      await expect(page.getByRole('button', { name: /^download txt$/i })).not.toBeVisible()
+      await expect(page.getByRole('button', { name: /re-analyze & compare/i })).toBeVisible()
+    })
+
+    await test.step('a fresh re-analysis produces a new comparison and unlocks Download again', async () => {
+      // Deliberately different numbers from the first response, so a
+      // pass here proves this is a genuinely new comparison, not a
+      // leftover from the first re-analysis.
+      const secondResponse: ReanalyzeResponse = {
+        after_analysis: withOverallScore(90),
+        comparison: {
+          score_before: 85,
+          score_after: 90,
+          score_delta: 5,
+          status: 'improved',
+          category_comparisons: [],
+          strengths_gained: [],
+          strengths_lost: [],
+          weaknesses_resolved: [],
+          weaknesses_remaining: [],
+          new_weaknesses: [],
+        },
+      }
+      await mockReanalyzeEndpoint(page, fixtureTailoringPlan.plan_id, secondResponse)
+      await page.getByRole('button', { name: /re-analyze & compare/i }).click()
+
+      await expect(page.getByText(scoreBadgeText(85, 90))).toBeVisible()
+      await expect(page.getByRole('button', { name: /^download txt$/i })).toBeVisible()
+    })
   })
 
   test('score improves: the result is clearly presented as a measurable improvement', async ({

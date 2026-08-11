@@ -11,7 +11,21 @@
 // actually returned, without ever asserting a specific score or that the
 // score must improve (see docs/features/postapply-analysis-loop.md --
 // improved/unchanged/decreased are all valid, truthful outcomes).
-import { test, expect } from '@playwright/test'
+//
+// This spec exists to prove the *product contract*, not just that each
+// screen individually works:
+//
+//   Preview -> reviewable diff -> Apply -> re-analyze with visible
+//   progress -> verified before/after result -> Download
+//
+// -- never the shortcut "Apply -> Download" the app used to allow. See
+// docs/features/postapply-analysis-loop.md's "Download is gated on
+// re-analysis" for the enforced rule this test is exercising for real,
+// against the real backend, in addition to the deterministic coverage in
+// post-apply-analysis.spec.ts.
+import { test, expect, type Download } from '@playwright/test'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   completeCareerConversation,
   generateTailoringPlan,
@@ -19,6 +33,11 @@ import {
   uploadResumeAndJobDescription,
 } from './helpers/tailoringFlow'
 import type { ReanalyzeResponse } from '../src/data/postApplyTypes'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const ARTIFACTS_DIR = path.join(__dirname, '..', 'artifacts', 'e2e')
+const TAILORING_PREVIEW_SCREENSHOT = path.join(ARTIFACTS_DIR, 'tailoring-preview-diff.png')
+const POST_APPLY_COMPARISON_SCREENSHOT = path.join(ARTIFACTS_DIR, 'post-apply-comparison.png')
 
 test.describe('Golden path: upload through download', () => {
   test('a candidate can go from resume upload to a downloaded tailored resume', async ({
@@ -66,38 +85,49 @@ test.describe('Golden path: upload through download', () => {
       await expect(page.getByText(/^1 of \d+ selected$/)).toBeVisible()
     })
 
-    await test.step('preview the selected change (read-only)', async () => {
+    await test.step('preview tailoring changes', async () => {
       await page.getByRole('button', { name: 'Preview Changes' }).click()
       await expect(page.getByRole('heading', { name: 'Preview Changes' })).toBeVisible()
       await expect(page.getByRole('button', { name: 'Apply Now' })).toBeVisible()
       // Nothing is committed by opening the preview.
       await expect(page.getByText('Final Resume Preview')).not.toBeVisible()
+
+      // The reviewable, GitHub-style split diff is the whole point of
+      // "Preview" -- it must actually be on screen before Apply, not just
+      // a generic "changes ready" message.
+      await expect(page.getByText(/sections changed/i)).toBeVisible()
     })
 
-    await test.step('apply the selected change', async () => {
+    await test.step('capture tailoring preview', async () => {
+      // Scoped to the diff card itself (not the full viewport) so the
+      // screenshot is a focused, reviewable artifact of the split
+      // view/section grouping -- see this file's header for why this
+      // exists (human inspection, not a functional assertion; the DOM
+      // assertions above and below remain authoritative).
+      const diffCard = page.locator('.rounded-2xl', { hasText: /sections changed/i }).first()
+      await diffCard.screenshot({ path: TAILORING_PREVIEW_SCREENSHOT })
+    })
+
+    await test.step('apply selected changes', async () => {
       await page.getByRole('button', { name: 'Apply Now' }).click()
       await expect(page.getByText('Final Resume Preview')).toBeVisible({ timeout: 30_000 })
-    })
-
-    await test.step('confirm the updated resume is shown, with the applied change marked', async () => {
       await expect(page.getByText('Applied changes (1)')).toBeVisible()
       await expect(page.getByText('Applied').first()).toBeVisible()
     })
 
-    await test.step('Download is not offered until the applied resume has been re-analyzed', async () => {
+    await test.step('verify download is gated', async () => {
       // The core enforced UX this test exists to prove: Apply alone is
       // never enough to unlock Download -- see docs/features/postapply-
-      // analysis-loop.md's "Download is gated on re-analysis".
-      await expect(page.getByRole('button', { name: /^download txt$/i })).not.toBeVisible()
+      // analysis-loop.md's "Download is gated on re-analysis". No
+      // download button exists anywhere on the page yet, in any format.
+      await expect(
+        page.getByRole('button', { name: /^download (txt|markdown|docx|pdf)$/i }),
+      ).toHaveCount(0)
       await expect(page.getByRole('button', { name: 'Re-analyze & Compare' })).toBeVisible()
     })
 
-    await test.step('re-analyze the applied resume and verify a truthful comparison', async () => {
-      // Reads the real backend response rather than mocking it -- this
-      // is the one live-only assertion source of truth for what the LLM
-      // actually produced this run; the deterministic three-outcome
-      // coverage (improved/unchanged/decreased/failure) already lives in
-      // post-apply-analysis.spec.ts and is not duplicated here.
+    let reanalyzeResponse: Awaited<ReturnType<typeof page.waitForResponse>>
+    await test.step('verify re-analysis progress', async () => {
       const reanalyzeResponsePromise = page.waitForResponse(
         (response) => response.url().includes('/reanalyze') && response.request().method() === 'POST',
         { timeout: 120_000 },
@@ -105,13 +135,23 @@ test.describe('Golden path: upload through download', () => {
       await page.getByRole('button', { name: 'Re-analyze & Compare' }).click()
 
       // A real re-analysis call can take a good while -- confirm the
-      // "meaningful progress" state (not just a disabled/relabeled
-      // button) is what the candidate actually sees during that wait.
+      // "meaningful progress" state (the application's own
+      // ConversationLoadingState copy, not an invented selector or a
+      // fabricated percentage) is what the candidate actually sees
+      // during that wait, and that Download stays gated throughout it.
       await expect(page.getByText(/re-analyzing your updated resume/i)).toBeVisible()
-      await expect(page.getByRole('button', { name: /^download txt$/i })).not.toBeVisible()
+      await expect(
+        page.getByRole('button', { name: /^download (txt|markdown|docx|pdf)$/i }),
+      ).toHaveCount(0)
 
-      const reanalyzeResponse = await reanalyzeResponsePromise
+      reanalyzeResponse = await reanalyzeResponsePromise
       expect(reanalyzeResponse.ok()).toBe(true)
+
+      // The loading state clears once the real response has landed.
+      await expect(page.getByText(/re-analyzing your updated resume/i)).not.toBeVisible()
+    })
+
+    await test.step('verify post-apply comparison', async () => {
       const body = (await reanalyzeResponse.json()) as ReanalyzeResponse
       const { score_before, score_after, score_delta, status } = body.comparison
 
@@ -166,16 +206,28 @@ test.describe('Golden path: upload through download', () => {
       // adjacent text nodes around an arrow icon with no separator).
       await expect(page.getByText(`${score_before}${score_after}`)).toBeVisible()
 
-      // The progress state is gone and Download is now available -- the
-      // comparison landing is what unlocks it.
-      await expect(page.getByText(/re-analyzing your updated resume/i)).not.toBeVisible()
+      // Download only becomes available now that a valid comparison
+      // actually exists -- the whole point of this test.
       await expect(page.getByRole('button', { name: /^download txt$/i })).toBeVisible()
     })
 
-    await test.step('download the final resume', async () => {
+    await test.step('capture post-apply comparison', async () => {
+      // Full page (not the whole OS window -- Playwright's page
+      // screenshot excludes browser chrome), so the reviewable artifact
+      // shows the comparison card, its surrounding UX, and the now-
+      // available Download CTA together, not just the comparison numbers
+      // in isolation.
+      await page.screenshot({ path: POST_APPLY_COMPARISON_SCREENSHOT, fullPage: true })
+    })
+
+    let download: Download
+    await test.step('download final resume', async () => {
       const downloadPromise = page.waitForEvent('download')
       await page.getByRole('button', { name: /^download txt$/i }).click()
-      const download = await downloadPromise
+      download = await downloadPromise
+    })
+
+    await test.step('verify downloaded artifact', async () => {
       expect(download.suggestedFilename()).toMatch(/\.txt$/i)
       const stream = await download.createReadStream()
       const chunks: Buffer[] = []

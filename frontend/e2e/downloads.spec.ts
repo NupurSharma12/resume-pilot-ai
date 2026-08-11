@@ -21,62 +21,71 @@ test.describe('Downloads', () => {
     // the config, since the deterministic specs genuinely don't need it.
     test.setTimeout(300_000)
 
-    await runFullFlowThroughGeneratedPlan(page)
+    await test.step('reach a real, applied final resume', async () => {
+      await runFullFlowThroughGeneratedPlan(page)
+      await page.getByRole('button', { name: 'Preview Changes' }).click()
+      await page.getByRole('button', { name: 'Apply Now' }).click()
+      await expect(page.getByText('Final Resume Preview')).toBeVisible({ timeout: 30_000 })
 
-    // Apply whatever's selected by default, to get to a real, committed
-    // final resume the export endpoint can act on.
-    await page.getByRole('button', { name: 'Preview Changes' }).click()
-    await page.getByRole('button', { name: 'Apply Now' }).click()
-    await expect(page.getByText('Final Resume Preview')).toBeVisible({ timeout: 30_000 })
-
-    // Download only renders once a re-analysis has completed for this
-    // final resume (see docs/features/postapply-analysis-loop.md's
-    // "Download is gated on re-analysis") -- a real re-analysis call, so
-    // this can take a while, same as the earlier real LLM calls in
-    // `runFullFlowThroughGeneratedPlan`.
-    await page.getByRole('button', { name: 'Re-analyze & Compare' }).click()
-    await expect(page.getByText(/re-analyzing your updated resume/i)).toBeVisible()
-    await expect(page.getByText(/re-analyzing your updated resume/i)).not.toBeVisible({
-      timeout: 120_000,
+      // Download only renders once a re-analysis has completed for this
+      // final resume (see docs/features/postapply-analysis-loop.md's
+      // "Download is gated on re-analysis") -- not yet available here.
+      await expect(
+        page.getByRole('button', { name: /^download (txt|markdown|docx|pdf)$/i }),
+      ).toHaveCount(0)
     })
 
-    const downloadButtons = page.getByRole('button', { name: /^download (txt|markdown|docx|pdf)$/i })
-    const availableCount = await downloadButtons.count()
-    expect(availableCount).toBeGreaterThan(0)
+    await test.step('re-analyze to unlock Download', async () => {
+      // A real re-analysis call, so this can take a while, same as the
+      // earlier real LLM calls in `runFullFlowThroughGeneratedPlan`.
+      await page.getByRole('button', { name: 'Re-analyze & Compare' }).click()
+      await expect(page.getByText(/re-analyzing your updated resume/i)).toBeVisible()
+      await expect(page.getByText(/re-analyzing your updated resume/i)).not.toBeVisible({
+        timeout: 120_000,
+      })
+    })
 
-    for (let i = 0; i < availableCount; i++) {
-      const button = downloadButtons.nth(i)
-      const label = (await button.textContent())?.trim() ?? ''
+    await test.step('download and verify every format the app offers', async () => {
+      const downloadButtons = page.getByRole('button', {
+        name: /^download (txt|markdown|docx|pdf)$/i,
+      })
+      const availableCount = await downloadButtons.count()
+      expect(availableCount).toBeGreaterThan(0)
 
-      const downloadPromise = page.waitForEvent('download')
-      await button.click()
-      const download = await downloadPromise
+      for (let i = 0; i < availableCount; i++) {
+        const button = downloadButtons.nth(i)
+        const label = (await button.textContent())?.trim() ?? ''
 
-      const stream = await download.createReadStream()
-      const chunks: Buffer[] = []
-      for await (const chunk of stream ?? []) chunks.push(chunk as Buffer)
-      const buffer = Buffer.concat(chunks)
-      expect(buffer.length, `${label} download should not be empty`).toBeGreaterThan(0)
+        const downloadPromise = page.waitForEvent('download')
+        await button.click()
+        const download = await downloadPromise
 
-      if (/txt/i.test(label)) {
-        expect(download.suggestedFilename()).toMatch(/\.txt$/i)
-        expect(buffer.toString('utf-8').toLowerCase()).toContain('summary')
-      } else if (/markdown/i.test(label)) {
-        expect(download.suggestedFilename()).toMatch(/\.md$/i)
-        expect(buffer.toString('utf-8').length).toBeGreaterThan(0)
-      } else if (/docx/i.test(label)) {
-        expect(download.suggestedFilename()).toMatch(/\.docx$/i)
-        // A .docx is a ZIP container -- "PK\x03\x04" is the local-file-
-        // header signature every valid ZIP (and therefore every valid
-        // .docx) starts with. This is a real structural check, not a
-        // guess: an app bug that emitted plain text with a .docx
-        // extension would fail it.
-        expect(buffer.subarray(0, 4).toString('latin1')).toBe('PK\x03\x04')
-      } else if (/pdf/i.test(label)) {
-        expect(download.suggestedFilename()).toMatch(/\.pdf$/i)
-        expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-')
+        const stream = await download.createReadStream()
+        const chunks: Buffer[] = []
+        for await (const chunk of stream ?? []) chunks.push(chunk as Buffer)
+        const buffer = Buffer.concat(chunks)
+        expect(buffer.length, `${label} download should not be empty`).toBeGreaterThan(0)
+
+        if (/txt/i.test(label)) {
+          expect(download.suggestedFilename()).toMatch(/\.txt$/i)
+          expect(buffer.toString('utf-8').toLowerCase()).toContain('summary')
+        } else if (/markdown/i.test(label)) {
+          expect(download.suggestedFilename()).toMatch(/\.md$/i)
+          expect(buffer.toString('utf-8').length).toBeGreaterThan(0)
+        } else if (/docx/i.test(label)) {
+          expect(download.suggestedFilename()).toMatch(/\.docx$/i)
+          // A .docx is a ZIP container -- "PK\x03\x04" is the local-file-
+          // header signature every valid ZIP (and therefore every valid
+          // .docx) starts with. This is a real structural check, not a
+          // guess: an app bug that emitted plain text with a .docx
+          // extension would fail it.
+          expect(buffer.subarray(0, 4).toString('latin1')).toBe('PK\x03\x04')
+        } else if (/pdf/i.test(label)) {
+          expect(download.suggestedFilename()).toMatch(/\.pdf$/i)
+          expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-')
+        }
       }
-    }
+    })
   })
 
   test('a failed export shows an inline error without hiding the final resume preview', async ({
