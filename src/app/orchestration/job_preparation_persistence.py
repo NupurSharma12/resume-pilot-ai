@@ -204,6 +204,23 @@ async def record_applied_tailoring_selection(
     )
 
 
+async def record_interview_preparation(
+    store: PersistenceStore, job_preparation_id: UUID, interview_preparation: dict
+) -> JobPreparation:
+    """Persist the generated Interview Preparation guide.
+
+    Deliberately no dedicated checkpoint timestamp (unlike boundaries D-G
+    above) -- Interview Preparation is represented entirely by
+    `interview_preparation` itself being non-null, per this milestone's
+    explicit scope decision, mirroring `JobPreparation.interview_preparation`'s
+    own docstring.
+    """
+    current = await _require_job_preparation(store, job_preparation_id)
+    return await store.save_job_preparation(
+        current.model_copy(update={"interview_preparation": interview_preparation})
+    )
+
+
 async def record_post_apply_analysis(
     store: PersistenceStore,
     job_preparation_id: UUID,

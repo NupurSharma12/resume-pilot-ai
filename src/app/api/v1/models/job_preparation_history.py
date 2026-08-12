@@ -124,3 +124,6 @@ class JobPreparationDetailResponse(BaseModel):
             "'reanalyzed_at': ...}, or null."
         )
     )
+    interview_preparation: dict | None = Field(
+        description="The generated Interview Preparation guide, or null if none has been generated."
+    )

@@ -5,6 +5,7 @@ import * as jobPreparationHistoryApi from '../lib/jobPreparationHistoryApi'
 import { ApiError } from '../lib/api'
 import type {
   CheckpointStatus,
+  InterviewPreparation,
   JobPreparationDetail,
   JobPreparationSummary,
 } from '../data/jobPreparationHistoryTypes'
@@ -62,6 +63,38 @@ const fixtureDetail: JobPreparationDetail = {
     analysis: { overall_assessment: { overall_score: 85 } },
     comparison: { score_before: 72, score_after: 85, status: 'improved' },
   },
+  interview_preparation: null,
+}
+
+const fixtureInterviewPreparation: InterviewPreparation = {
+  system_design_questions: [
+    {
+      question: 'Design a distributed document-analysis pipeline.',
+      rationale: 'The resume shows large-scale backend systems experience.',
+    },
+  ],
+  coding_questions: [
+    {
+      title: 'Merge Intervals',
+      topic: 'Sorting',
+      difficulty: 'medium',
+      relevance: 'The role involves scheduling logic.',
+    },
+  ],
+  behavioral_questions: [
+    {
+      question: 'Describe a time you led a migration.',
+      source: 'career_conversation',
+      context: 'I led a 4-engineer migration off a legacy monolith.',
+    },
+    {
+      question: 'Tell me about a recent challenge.',
+      source: 'suggested',
+      context: null,
+    },
+  ],
+  generated_at: '2026-08-12T10:00:00Z',
+  stage: 'career_conversation_enriched',
 }
 
 describe('HistoryPage', () => {
@@ -208,5 +241,107 @@ describe('HistoryPage', () => {
     expect(
       screen.queryByText('This job preparation no longer exists.'),
     ).not.toBeInTheDocument()
+  })
+
+  it('shows an empty state with a generate action when no interview preparation exists yet', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.getJobPreparation.mockResolvedValue(fixtureDetail)
+
+    render(<HistoryPage />)
+    await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Senior Engineer'))
+
+    await waitFor(() => expect(screen.getByText('72%')).toBeInTheDocument())
+    expect(screen.getByText(/no interview preparation guide yet/i)).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Generate Interview Preparation' }),
+    ).toBeInTheDocument()
+  })
+
+  it('renders system design, coding, and behavioral questions once a guide is persisted', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.getJobPreparation.mockResolvedValue({
+      ...fixtureDetail,
+      interview_preparation: fixtureInterviewPreparation,
+    })
+
+    render(<HistoryPage />)
+    await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Senior Engineer'))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Design a distributed document-analysis pipeline.'),
+      ).toBeInTheDocument(),
+    )
+    expect(screen.getByText('Merge Intervals')).toBeInTheDocument()
+    expect(screen.getByText('Describe a time you led a migration.')).toBeInTheDocument()
+    expect(screen.getByText('Tell me about a recent challenge.')).toBeInTheDocument()
+    expect(screen.getByText('From Career Conversation')).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Generate Interview Preparation' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('generates an interview preparation guide and renders it once the call resolves', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.getJobPreparation.mockResolvedValue(fixtureDetail)
+    let resolveGeneration: (value: InterviewPreparation) => void = () => {}
+    mockedApi.generateInterviewPreparation.mockReturnValue(
+      new Promise((resolve) => {
+        resolveGeneration = resolve
+      }),
+    )
+
+    render(<HistoryPage />)
+    await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Senior Engineer'))
+    await waitFor(() => expect(screen.getByText('72%')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate Interview Preparation' }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /generating/i })).toBeDisabled())
+    expect(mockedApi.generateInterviewPreparation).toHaveBeenCalledWith('job-prep-1')
+
+    resolveGeneration(fixtureInterviewPreparation)
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Design a distributed document-analysis pipeline.'),
+      ).toBeInTheDocument(),
+    )
+    expect(
+      screen.queryByRole('button', { name: /generate interview preparation|generating/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows a retryable error state when generation fails', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.getJobPreparation.mockResolvedValue(fixtureDetail)
+    mockedApi.generateInterviewPreparation.mockRejectedValue(
+      new ApiError('Generating interview preparation failed.'),
+    )
+
+    render(<HistoryPage />)
+    await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Senior Engineer'))
+    await waitFor(() => expect(screen.getByText('72%')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate Interview Preparation' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('Generating interview preparation failed.')).toBeInTheDocument(),
+    )
+    const retryButton = screen.getByRole('button', { name: 'Try Again' })
+    expect(retryButton).toBeInTheDocument()
+
+    mockedApi.generateInterviewPreparation.mockResolvedValue(fixtureInterviewPreparation)
+    fireEvent.click(retryButton)
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Design a distributed document-analysis pipeline.'),
+      ).toBeInTheDocument(),
+    )
   })
 })

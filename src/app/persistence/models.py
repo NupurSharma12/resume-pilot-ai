@@ -120,7 +120,7 @@ class JobPreparation(BaseModel):
         description="{'analysis': ..., 'comparison': ..., 'reanalyzed_at': ...}, or null."
     )
     interview_preparation: dict | None = Field(
-        description="Interview-preparation state, serialized, or null. No producer exists yet."
+        description="The generated Interview Preparation guide, serialized, or null."
     )
 
     # Five independent durable checkpoints/recovery points (see the

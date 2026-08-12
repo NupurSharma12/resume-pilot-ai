@@ -129,6 +129,32 @@ const partialDetail = {
   tailoring_plan: null,
   applied_resume_text: null,
   post_apply_analysis: null,
+  interview_preparation: null,
+}
+
+const fixtureInterviewPreparation = {
+  system_design_questions: [
+    {
+      question: 'Design a distributed document-analysis pipeline.',
+      rationale: 'The resume shows large-scale backend systems experience.',
+    },
+  ],
+  coding_questions: [
+    {
+      title: 'Merge Intervals',
+      topic: 'Sorting',
+      difficulty: 'medium',
+      relevance: 'The role involves scheduling logic.',
+    },
+  ],
+  behavioral_questions: [
+    {
+      question: 'Describe a time you led a migration.',
+      source: 'career_conversation',
+      context: 'Led a 4-engineer migration off a legacy monolith.',
+    },
+  ],
+  generated_at: '2026-08-12T10:00:00Z',
 }
 
 test.describe('History screen', () => {
@@ -182,6 +208,40 @@ test.describe('History screen', () => {
     await main.getByText('Senior Full-Stack Engineer').click()
     await expect(main.getByText('78%')).toBeVisible()
     await expect(main.getByText('Strong backend foundation.')).toBeVisible()
+  })
+
+  test('generates and displays an Interview Preparation guide, deterministically mocked', async ({
+    page,
+  }) => {
+    await page.route('**/v1/job-preparations', async (route) => {
+      await route.fulfill({ json: { items: [partialSummary] } })
+    })
+    await page.route(`**/v1/job-preparations/${JOB_PREPARATION_ID}`, async (route) => {
+      await route.fulfill({ json: partialDetail })
+    })
+    await page.route(
+      `**/v1/job-preparations/${JOB_PREPARATION_ID}/interview-preparation`,
+      async (route) => {
+        await route.fulfill({ json: fixtureInterviewPreparation })
+      },
+    )
+
+    await page.goto('/')
+    await page.getByRole('link', { name: 'History' }).click()
+    await expect(page).toHaveURL(/\/history$/)
+
+    const main = page.locator('main')
+    await main.getByText('Senior Full-Stack Engineer').click()
+
+    await expect(main.getByText(/no interview preparation guide yet/i)).toBeVisible()
+    await main.getByRole('button', { name: 'Generate Interview Preparation' }).click()
+
+    await expect(
+      main.getByText('Design a distributed document-analysis pipeline.'),
+    ).toBeVisible()
+    await expect(main.getByText('Merge Intervals')).toBeVisible()
+    await expect(main.getByText('Describe a time you led a migration.')).toBeVisible()
+    await expect(main.getByText('From Career Conversation')).toBeVisible()
   })
 
   test('shows an empty state when there is no history yet', async ({ page }) => {

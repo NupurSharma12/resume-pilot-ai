@@ -4,6 +4,7 @@ import {
   Briefcase,
   LayoutGrid,
   Wand2,
+  ClipboardList,
   History,
   Settings,
 } from 'lucide-react'
@@ -17,6 +18,12 @@ const NAV_ITEMS = [
   { id: 'resume', label: 'Resume', icon: FileText, path: '/resume' },
   { id: 'job-description', label: 'Job Description', icon: Briefcase, path: '/job-description' },
   { id: 'dashboard', label: 'Dashboard', icon: LayoutGrid, path: '/' },
+  {
+    id: 'interview-preparation',
+    label: 'Interview Preparation',
+    icon: ClipboardList,
+    path: '/interview-preparation',
+  },
   { id: 'tailored-resume', label: 'Tailored Resume', icon: Wand2, path: '/tailored-resume' },
   { id: 'history', label: 'History', icon: History, path: '/history' },
   { id: 'settings', label: 'Settings', icon: Settings, path: '/settings' },
@@ -51,11 +58,17 @@ export default function Sidebar({ resumeAnalysis, postApplyComparison }: Sidebar
 
       <nav className="flex flex-col gap-1 px-4 py-4">
         {NAV_ITEMS.map((item) => {
-          // Tailored Resume is only ever gated on a completed analysis
-          // existing to ground it in — same prerequisite
-          // CareerConversationPage/TailoredResumePage already enforce; no
-          // other nav item is ever disabled.
-          const disabled = item.id === 'tailored-resume' && resumeAnalysis === null
+          // Tailored Resume and Interview Preparation are both gated on a
+          // completed analysis existing to ground them in -- the same
+          // prerequisite CareerConversationPage/TailoredResumePage/
+          // InterviewPreparationPage each already enforce on their own
+          // page too (defense in depth); no other nav item is ever
+          // disabled. Interview Preparation deliberately does *not* also
+          // require Career Conversation or Tailoring -- it's available
+          // immediately after Analysis (see InterviewPreparationPage).
+          const disabled =
+            (item.id === 'tailored-resume' || item.id === 'interview-preparation') &&
+            resumeAnalysis === null
           const isActive = location.pathname === item.path
           const Icon = item.icon
           const className = `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium ${
