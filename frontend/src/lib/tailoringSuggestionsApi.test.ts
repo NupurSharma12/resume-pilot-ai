@@ -36,6 +36,7 @@ describe('generateTailoringSuggestions', () => {
       fixtureCompletedSession,
       '  Keep it under two pages.  ',
       'resume.pdf',
+      'job-prep-1',
     )
 
     expect(result).toEqual(fixtureGenerateSuggestionsResponse)
@@ -49,6 +50,7 @@ describe('generateTailoringSuggestions', () => {
     expect(body.career_conversation).toEqual(fixtureCompletedSession)
     expect(body.custom_instructions).toBe('Keep it under two pages.')
     expect(body.resume_filename).toBe('resume.pdf')
+    expect(body.job_preparation_id).toBe('job-prep-1')
   })
 
   it('sends null custom_instructions when blank', async () => {
@@ -65,6 +67,7 @@ describe('generateTailoringSuggestions', () => {
       fixtureCompletedSession,
       '   ',
       null,
+      null,
     )
 
     const body = JSON.parse(fetchMock.mock.calls[0][1].body)
@@ -72,11 +75,40 @@ describe('generateTailoringSuggestions', () => {
     expect(body.resume_filename).toBeNull()
   })
 
+  it('omits job_preparation_id entirely when null, rather than sending it as null', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(fixtureGenerateSuggestionsResponse),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await generateTailoringSuggestions(
+      'resume text',
+      'jd text',
+      fixtureResumeAnalysis,
+      fixtureCompletedSession,
+      '',
+      null,
+      null,
+    )
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect('job_preparation_id' in body).toBe(false)
+  })
+
   it('throws ApiError when the network request itself fails', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('network down')))
 
     await expect(
-      generateTailoringSuggestions('r', 'jd', fixtureResumeAnalysis, fixtureCompletedSession, '', null),
+      generateTailoringSuggestions(
+        'r',
+        'jd',
+        fixtureResumeAnalysis,
+        fixtureCompletedSession,
+        '',
+        null,
+        null,
+      ),
     ).rejects.toThrow(ApiError)
   })
 
@@ -91,7 +123,15 @@ describe('generateTailoringSuggestions', () => {
     )
 
     await expect(
-      generateTailoringSuggestions('r', 'jd', fixtureResumeAnalysis, fixtureCompletedSession, '', null),
+      generateTailoringSuggestions(
+        'r',
+        'jd',
+        fixtureResumeAnalysis,
+        fixtureCompletedSession,
+        '',
+        null,
+        null,
+      ),
     ).rejects.toThrow('Planned edit cites no evidence.')
   })
 })

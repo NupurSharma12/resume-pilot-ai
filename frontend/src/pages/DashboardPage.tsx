@@ -14,6 +14,7 @@ import { getThemeForIndex } from '../data/theme'
 import { candidate, skillMatchNarratives, defaultSkillMatchNarrative } from '../data/mockData'
 import { buildExecutiveSummary, deriveTopStrengths, deriveTopRisks } from '../lib/insights'
 import { analyzeResume, ApiError } from '../lib/api'
+import { useResumeSession } from '../session/ResumeSessionContext'
 import type { DashboardOutletContext } from '../layouts/DashboardLayout'
 
 export default function DashboardPage() {
@@ -88,6 +89,7 @@ export default function DashboardPage() {
   const topStrengths = resumeAnalysis ? deriveTopStrengths(resumeAnalysis) : []
   const topRisks = resumeAnalysis ? deriveTopRisks(resumeAnalysis) : []
 
+  const { setJobPreparationId } = useResumeSession()
   const canAnalyze = Boolean(resume) && Boolean(jobDescription)
   const hasResult = status === 'success' && resumeAnalysis !== null
 
@@ -96,9 +98,10 @@ export default function DashboardPage() {
 
     setStatus('loading')
     try {
-      const result = await analyzeResume(resume.text, jobDescription.text)
-      setResumeAnalysis(result)
-      setSelectedCategory(result.skill_matches[0]?.category)
+      const { analysis, jobPreparationId } = await analyzeResume(resume.text, jobDescription.text)
+      setResumeAnalysis(analysis)
+      setJobPreparationId(jobPreparationId)
+      setSelectedCategory(analysis.skill_matches[0]?.category)
       setStatus('success')
       // Only collapses on success (not immediately on click), per spec —
       // an error or an in-flight request leaves the inputs as the user left them.

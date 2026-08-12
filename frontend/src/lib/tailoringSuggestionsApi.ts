@@ -51,7 +51,11 @@ async function throwForFailedResponse(response: Response, fallbackMessage: strin
 // `tailorResume` -- and `resumeFilename` is passed through only so the
 // backend can compute an honest `default_export_format`; the backend
 // never reads that file's content (see GenerateSuggestionsRequest's
-// docstring), only its extension.
+// docstring), only its extension. `jobPreparationId` (from session state,
+// set by `analyzeResume`) is threaded through so this plan's durable
+// history (and, later, Apply/Reanalyze) attaches to the same
+// JobPreparation -- omitted entirely (not sent as `null`) when there
+// isn't one, since the backend field is optional.
 export async function generateTailoringSuggestions(
   resume: string,
   jobDescription: string,
@@ -59,6 +63,7 @@ export async function generateTailoringSuggestions(
   careerConversation: ConversationSessionState,
   customInstructions: string,
   resumeFilename: string | null,
+  jobPreparationId: string | null,
 ): Promise<GenerateSuggestionsResponse> {
   let response: Response
   try {
@@ -73,6 +78,7 @@ export async function generateTailoringSuggestions(
         custom_instructions:
           customInstructions.trim().length > 0 ? customInstructions.trim() : null,
         resume_filename: resumeFilename,
+        ...(jobPreparationId !== null ? { job_preparation_id: jobPreparationId } : {}),
       }),
     })
   } catch {

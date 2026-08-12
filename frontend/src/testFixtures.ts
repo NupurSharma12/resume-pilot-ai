@@ -133,6 +133,7 @@ export function fixturePersistedSession(
     postApplyAnalysis: null,
     postApplyComparison: null,
     postApplyAnalysisStatus: 'idle',
+    jobPreparationId: null,
     ...overrides,
   }
 }

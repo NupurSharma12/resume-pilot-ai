@@ -34,6 +34,7 @@ export default function CareerConversationPage() {
     activeCareerConversationSessionId,
     setActiveCareerConversationSessionId,
     setCareerConversationStatus,
+    jobPreparationId,
   } = useResumeSession()
 
   const [session, setSession] = useState<ConversationSessionState | null>(null)
@@ -108,7 +109,12 @@ export default function CareerConversationPage() {
         }
       }
 
-      const result = await startCareerConversation(resume.text, jobDescription.text, resumeAnalysis)
+      const result = await startCareerConversation(
+        resume.text,
+        jobDescription.text,
+        resumeAnalysis,
+        jobPreparationId,
+      )
       setSession(result)
       setActiveCareerConversationSessionId(result.session_id)
       setCareerConversationStatus(result.status)
@@ -129,6 +135,7 @@ export default function CareerConversationPage() {
     activeCareerConversationSessionId,
     setActiveCareerConversationSessionId,
     setCareerConversationStatus,
+    jobPreparationId,
   ])
 
   // Initializes (restores or starts) exactly once per page load, and only

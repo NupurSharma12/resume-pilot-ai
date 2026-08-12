@@ -54,6 +54,8 @@ function makeResumeSessionValue(
     setPostApplyComparison: vi.fn(),
     postApplyAnalysisStatus: 'idle',
     setPostApplyAnalysisStatus: vi.fn(),
+    jobPreparationId: null,
+    setJobPreparationId: vi.fn(),
     clearSession: vi.fn(),
     ...overrides,
   }

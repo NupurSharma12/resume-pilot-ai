@@ -83,6 +83,8 @@ function makeResumeSessionValue(
     setPostApplyComparison: vi.fn(),
     postApplyAnalysisStatus: 'idle',
     setPostApplyAnalysisStatus: vi.fn(),
+    jobPreparationId: null,
+    setJobPreparationId: vi.fn(),
     clearSession: vi.fn(),
     ...overrides,
   }
@@ -300,6 +302,7 @@ describe('TailoredResumePage: generating suggestions', () => {
       fixtureCompletedSession,
       '',
       fixtureResume.fileName,
+      null,
     )
 
     await waitFor(() =>
@@ -878,6 +881,7 @@ describe('TailoredResumePage: stale-plan recovery (backend restart / 404)', () =
         fixtureCompletedSession,
         'Keep it under two pages.',
         fixtureResume.fileName,
+        null,
       ),
     )
   })
