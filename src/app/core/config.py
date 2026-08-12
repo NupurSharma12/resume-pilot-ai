@@ -33,9 +33,8 @@ class Settings(BaseSettings):
     # implementation to construct. `memory` is the default so a fresh clone
     # runs with zero database configuration; `postgres` constructs a
     # `PostgresPersistenceStore` (persistence/postgres_store.py), requiring
-    # `database_url` below. Neither workflows nor API endpoints read from
-    # either store yet (see docs/persistent-backend-workflow-state.md) --
-    # that wiring is a later milestone.
+    # `database_url` below. Wired into the real application lifecycle and
+    # workflow as of Phase 3 -- see docs/persistent-backend-workflow-state.md.
     persistence_backend: Literal["memory", "postgres"] = Field(
         default="memory",
         description=(

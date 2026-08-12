@@ -40,6 +40,10 @@ from app.models.resume_analysis import (
     ResumeImprovement,
     SkillMatch,
 )
+from app.orchestration.job_preparation_persistence import record_career_conversation
+from app.persistence.dependencies import get_persistence_store
+from app.persistence.errors import JobPreparationCompletedError, JobPreparationNotFoundError
+from app.persistence.store import PersistenceStore
 from app.prompts.career_conversation_prompt_builder import CareerConversationPromptBuilder
 from app.sessions.conversation_session import ConversationSession, ConversationSessionStore
 from app.workflows.career_conversation_workflow import CareerConversationWorkflow
@@ -170,6 +174,34 @@ def _to_session_response(session: ConversationSession) -> ConversationSessionRes
     )
 
 
+async def _persist_if_complete(
+    persistence_store: PersistenceStore, session: ConversationSession
+) -> None:
+    """Boundary D: record `session`'s durable copy, but only once it has actually completed.
+
+    Shared by both `start_career_conversation` (a conversation can
+    complete on its very first turn -- see `CareerConversationWorkflow`'s
+    stop-condition handling, exercised by `_stop_decision`-seeded tests)
+    and `submit_career_conversation_answer` (the ordinary case: complete
+    after a later turn) -- either is a legitimate way for a session to
+    reach `COMPLETE`, and both must persist it. A no-op if `session` has
+    no `job_preparation_id` (the client never opted in) or is still
+    `IN_PROGRESS`.
+    """
+    if session.status != ConversationSessionStatus.COMPLETE or session.job_preparation_id is None:
+        return
+    try:
+        await record_career_conversation(
+            persistence_store,
+            session.job_preparation_id,
+            _to_session_response(session).model_dump(mode="json"),
+        )
+    except JobPreparationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except JobPreparationCompletedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 def _get_session_or_404(store: ConversationSessionStore, session_id: str) -> ConversationSession:
     """Look up `session_id` in `store`, raising `404` if it doesn't (or no longer) exist."""
     session = store.get(session_id)
@@ -183,6 +215,7 @@ async def start_career_conversation(
     payload: StartConversationRequest,
     workflow: CareerConversationWorkflow = Depends(get_career_conversation_workflow),
     store: ConversationSessionStore = Depends(get_conversation_session_store),
+    persistence_store: PersistenceStore = Depends(get_persistence_store),
 ) -> ConversationSessionResponse:
     """Create a new Career Conversation session and return its first question.
 
@@ -191,6 +224,12 @@ async def start_career_conversation(
     conversation turn via the workflow before returning — the same
     request that creates a session also returns its opening question, so
     callers never see a session with no question and no stop reason.
+
+    A conversation can occasionally complete on this very first turn (the
+    workflow's own stop condition, not anything special about this
+    endpoint) -- `_persist_if_complete` covers that case here too, not
+    just in `submit_career_conversation_answer`, so boundary D is never
+    silently skipped for a short conversation.
     """
     logger.info("career_conversation_start_received")
     start = time.perf_counter()
@@ -200,6 +239,7 @@ async def start_career_conversation(
         resume=payload.resume,
         job_description=payload.job_description,
         resume_analysis=resume_analysis,
+        job_preparation_id=payload.job_preparation_id,
     )
     try:
         await workflow.start_conversation(session)
@@ -213,6 +253,7 @@ async def start_career_conversation(
         )
         raise
     store.save(session)
+    await _persist_if_complete(persistence_store, session)
 
     logger.info(
         "career_conversation_start_completed",
@@ -231,6 +272,7 @@ async def submit_career_conversation_answer(
     payload: SubmitConversationAnswerRequest,
     workflow: CareerConversationWorkflow = Depends(get_career_conversation_workflow),
     store: ConversationSessionStore = Depends(get_conversation_session_store),
+    persistence_store: PersistenceStore = Depends(get_persistence_store),
 ) -> ConversationSessionResponse:
     """Record an answer to a session's current question and return the next turn (or completion).
 
@@ -284,6 +326,11 @@ async def submit_career_conversation_answer(
             )
             raise
         store.save(session)
+        # Boundary D (durable history): a no-op unless this turn actually
+        # completed the session -- see `_persist_if_complete`'s
+        # docstring. Stays inside `session.lock` so a concurrent retry
+        # that also observes COMPLETE can't race this write.
+        await _persist_if_complete(persistence_store, session)
 
     logger.info(
         "career_conversation_answer_completed",

@@ -2,7 +2,10 @@ Persistent Backend Workflow State
 
 Status
 
-Planned
+Implemented (Phase 3). See docs/persistent-backend-workflow-state.md for the actual
+implemented architecture (configuration, application lifecycle, the PersistenceStore
+dependency, and exactly what gets persisted at each workflow boundary). This document
+keeps the original product decision below for context.
 
 Purpose
 
