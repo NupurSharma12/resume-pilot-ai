@@ -20,6 +20,8 @@ a raw file body with a `Content-Disposition` header, not JSON — see
 `app.api.v1.endpoints.tailoring_suggestions.export_final_resume`.
 """
 
+from uuid import UUID
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.v1.models.analyze_resume import AnalyzeResumeResponse
@@ -60,6 +62,17 @@ class GenerateSuggestionsRequest(BaseModel):
             "export format counts as 'the original format' for the default download "
             "option -- never used to look up or re-read any file content, since no "
             "original file bytes are retained after upload."
+        ),
+    )
+    job_preparation_id: UUID | None = Field(
+        default=None,
+        description=(
+            "The durable JobPreparation this plan belongs to, from POST /v1/analyze's "
+            "response, if any. Optional: omitting it simply means this plan's eventual "
+            "durable tailoring_plan/applied-version history (see "
+            "app.orchestration.job_preparation_persistence) is never recorded. Carried on "
+            "the stored plan itself once set (see StoredPlan), not re-sent on apply/export/"
+            "reanalyze."
         ),
     )
 

@@ -15,6 +15,8 @@ enums, not evolving object shapes, so reusing them doesn't create the
 kind of coupling this module otherwise avoids.
 """
 
+from uuid import UUID
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.v1.models.analyze_resume import AnalyzeResumeResponse
@@ -32,6 +34,15 @@ class StartConversationRequest(BaseModel):
     )
     resume_analysis: AnalyzeResumeResponse = Field(
         description="The prior resume analysis result, exactly as returned by POST /v1/analyze."
+    )
+    job_preparation_id: UUID | None = Field(
+        default=None,
+        description=(
+            "The durable JobPreparation this conversation belongs to, from POST /v1/analyze's "
+            "response, if any. Optional: omitting it simply means this session's eventual "
+            "durable history (see app.orchestration.job_preparation_persistence) is never "
+            "recorded. Carried on the session itself once set, not re-sent on /answer."
+        ),
     )
 
 

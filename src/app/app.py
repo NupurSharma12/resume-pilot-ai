@@ -9,6 +9,7 @@ from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging, get_logger
 from app.gateways.llm.factory import build_llm_gateway
 from app.persistence.factory import build_persistence_store
+from app.persistence.lifecycle import Disposable
 from app.sessions.conversation_session import ConversationSessionStore
 from app.sessions.tailoring_plan_store import TailoringPlanStore
 
@@ -28,6 +29,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # share the chain across requests.
     build_llm_gateway(app.state.settings)
     yield
+    # `Disposable` is a structural (runtime_checkable) check, not an
+    # isinstance check against `PostgresPersistenceStore` -- this stays
+    # correct for whichever backend is configured without this module
+    # ever importing a database-specific type (see
+    # `app.persistence.lifecycle`'s docstring). `InMemoryPersistenceStore`
+    # has nothing to dispose and simply doesn't satisfy `Disposable`.
+    persistence_store = app.state.persistence_store
+    if isinstance(persistence_store, Disposable):
+        await persistence_store.dispose()
+        logger.info("persistence_store_disposed")
     logger.info("app_shutdown")
 
 

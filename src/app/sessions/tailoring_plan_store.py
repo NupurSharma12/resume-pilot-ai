@@ -42,6 +42,7 @@ worker processes or survive a restart.
 """
 
 from dataclasses import dataclass
+from uuid import UUID
 
 from app.models.evidence_store import EvidenceStore
 from app.models.resume_structure import StructuredResume
@@ -56,6 +57,13 @@ class StoredPlan:
     structured_resume: StructuredResume
     evidence_store: EvidenceStore
     job_description: str
+    # The durable JobPreparation this plan belongs to, if the client that
+    # generated it supplied one (see
+    # app.orchestration.job_preparation_persistence and
+    # GenerateSuggestionsRequest.job_preparation_id) -- optional, and
+    # never re-sent by the client on apply/export/reanalyze since it's
+    # carried here instead, the same way job_description already is.
+    job_preparation_id: UUID | None = None
 
 
 class TailoringPlanStore:

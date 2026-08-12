@@ -74,6 +74,14 @@ from app.models.resume_analysis import (
     SkillMatch,
 )
 from app.models.tailoring_suggestions import TailoringSuggestion
+from app.orchestration.job_preparation_persistence import (
+    record_applied_tailoring_selection,
+    record_generated_tailoring_plan,
+    record_post_apply_analysis,
+)
+from app.persistence.dependencies import get_persistence_store
+from app.persistence.errors import JobPreparationCompletedError, JobPreparationNotFoundError
+from app.persistence.store import PersistenceStore
 from app.prompts.resume_analysis_prompt_builder import ResumeAnalysisPromptBuilder
 from app.prompts.suggestion_planner_prompt_builder import SuggestionPlannerPromptBuilder
 from app.prompts.suggestion_rewrite_prompt_builder import SuggestionRewritePromptBuilder
@@ -356,6 +364,7 @@ async def generate_tailoring_suggestions(
     workflow: TailoringSuggestionWorkflow = Depends(get_tailoring_suggestion_workflow),
     store: TailoringPlanStore = Depends(get_tailoring_plan_store),
     settings: Settings = Depends(get_settings),
+    persistence_store: PersistenceStore = Depends(get_persistence_store),
 ) -> GenerateSuggestionsResponse:
     """Run the suggestion-generation pipeline and return a reviewable plan.
 
@@ -399,12 +408,29 @@ async def generate_tailoring_suggestions(
         )
         raise
 
+    # Boundary E (first half): the freshly generated candidate plan, if
+    # the client that requested it opted in with a job_preparation_id.
+    # `selection` is filled in later, at apply time -- see
+    # record_generated_tailoring_plan's docstring.
+    if payload.job_preparation_id is not None:
+        try:
+            await record_generated_tailoring_plan(
+                persistence_store,
+                payload.job_preparation_id,
+                result.plan.model_dump(mode="json"),
+            )
+        except JobPreparationNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except JobPreparationCompletedError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     store.save(
         StoredPlan(
             plan=result.plan,
             structured_resume=result.structured_resume,
             evidence_store=result.evidence_store,
             job_description=payload.job_description,
+            job_preparation_id=payload.job_preparation_id,
         )
     )
 
@@ -432,6 +458,7 @@ async def apply_tailoring_suggestions(
     payload: ApplySuggestionsRequest,
     applier: SuggestionApplier = Depends(get_suggestion_applier),
     store: TailoringPlanStore = Depends(get_tailoring_plan_store),
+    persistence_store: PersistenceStore = Depends(get_persistence_store),
 ) -> ApplySuggestionsResponse:
     """Apply a user-approved subset of `plan_id`'s suggestions and return a preview.
 
@@ -453,6 +480,24 @@ async def apply_tailoring_suggestions(
     stored_plan = _get_stored_plan_or_404(store, plan_id)
 
     result = _run_applier(applier, stored_plan, payload)
+
+    # Boundaries E (second half) + F: one new applied ResumeVersion, plus
+    # the user's actual selection/edits alongside the already-stored
+    # generated_plan -- only if this plan was generated with a
+    # job_preparation_id in the first place (see StoredPlan.job_preparation_id).
+    if stored_plan.job_preparation_id is not None:
+        try:
+            await record_applied_tailoring_selection(
+                persistence_store,
+                stored_plan.job_preparation_id,
+                applied_resume_text=result.final_resume.to_text(),
+                selected_suggestion_ids=payload.selected_suggestion_ids,
+                edited_texts=payload.edited_texts,
+            )
+        except JobPreparationNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except JobPreparationCompletedError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     logger.info(
         "apply_tailoring_suggestions_completed",
@@ -528,6 +573,7 @@ async def reanalyze_after_apply(
     store: TailoringPlanStore = Depends(get_tailoring_plan_store),
     workflow: ResumeAnalysisWorkflow = Depends(get_post_apply_analysis_workflow),
     settings: Settings = Depends(get_settings),
+    persistence_store: PersistenceStore = Depends(get_persistence_store),
 ) -> ReanalyzeResponse:
     """Re-analyze `plan_id`'s applied resume against its own job description and compare.
 
@@ -581,6 +627,22 @@ async def reanalyze_after_apply(
 
     before_result = _to_domain_analysis(payload.previous_analysis)
     comparison = compute_resume_analysis_comparison(before_result, after_result)
+
+    # Boundary G: the combined post-apply analysis + comparison, only if
+    # this plan was generated with a job_preparation_id in the first
+    # place (see StoredPlan.job_preparation_id).
+    if stored_plan.job_preparation_id is not None:
+        try:
+            await record_post_apply_analysis(
+                persistence_store,
+                stored_plan.job_preparation_id,
+                analysis=after_result.model_dump(mode="json"),
+                comparison=comparison.model_dump(mode="json"),
+            )
+        except JobPreparationNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except JobPreparationCompletedError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     logger.info(
         "reanalyze_after_apply_completed",

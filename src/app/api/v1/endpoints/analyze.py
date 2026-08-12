@@ -29,6 +29,9 @@ from app.api.v1.models.analyze_resume import (
 from app.core.config import Settings, get_settings
 from app.core.logging import get_logger
 from app.gateways.llm.factory import build_llm_gateway
+from app.orchestration.job_preparation_persistence import start_job_preparation
+from app.persistence.dependencies import get_persistence_store
+from app.persistence.store import PersistenceStore
 from app.prompts.resume_analysis_prompt_builder import ResumeAnalysisPromptBuilder
 from app.workflows.resume_analysis_workflow import ResumeAnalysisWorkflow
 
@@ -79,6 +82,7 @@ async def analyze_resume(
     payload: AnalyzeResumeRequest,
     workflow: ResumeAnalysisWorkflow = Depends(get_resume_analysis_workflow),
     settings: Settings = Depends(get_settings),
+    persistence_store: PersistenceStore = Depends(get_persistence_store),
 ) -> AnalyzeResumeResponse:
     """Analyze a resume against a job description and return the result.
 
@@ -124,10 +128,38 @@ async def analyze_resume(
             error_type=type(exc).__name__,
         )
         raise
+
+    # Durable history (see docs/persistent-backend-workflow-state.md):
+    # every analyze call records a brand-new Resume + ResumeVersion(1,
+    # original_upload) + JobPreparation, never merged with any prior
+    # upload -- see start_job_preparation's own docstring. Deliberately
+    # not wrapped in the same try/except as the workflow call above: a
+    # persistence failure here is a distinct failure mode (this app's
+    # durable store, not the LLM provider chain) and is logged under its
+    # own event name before propagating unchanged, exactly like the
+    # workflow failure path above -- see this project's error-handling
+    # convention (no broad `except Exception`, no swallowed failures).
+    try:
+        job_preparation = await start_job_preparation(
+            persistence_store,
+            resume_text=payload.resume,
+            job_description=payload.job_description,
+            analysis_result=result.model_dump(mode="json"),
+        )
+    except Exception as exc:
+        logger.error(
+            "analyze_persistence_failed",
+            elapsed_ms=(time.perf_counter() - start) * 1000,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        raise
+
     logger.info(
         "analyze_request_completed",
         provider=settings.primary_provider,
         elapsed_ms=(time.perf_counter() - start) * 1000,
+        job_preparation_id=str(job_preparation.id),
     )
     return AnalyzeResumeResponse(
         overall_assessment=OverallAssessmentResponse(
@@ -165,4 +197,5 @@ async def analyze_resume(
             )
             for resume_improvement in result.resume_improvements
         ],
+        job_preparation_id=job_preparation.id,
     )

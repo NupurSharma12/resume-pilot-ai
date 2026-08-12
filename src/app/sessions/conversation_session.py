@@ -18,6 +18,7 @@ this can run behind multiple worker processes or survive a restart.
 
 import asyncio
 import uuid
+from uuid import UUID
 
 from app.core.logging import get_logger
 from app.models.career_conversation import (
@@ -62,11 +63,19 @@ class ConversationSession:
         resume: str,
         job_description: str,
         resume_analysis: ResumeAnalysisResult,
+        job_preparation_id: UUID | None = None,
     ) -> None:
         self.session_id = session_id
         self.resume = resume
         self.job_description = job_description
         self.resume_analysis = resume_analysis
+        # The durable JobPreparation this session's eventual completed
+        # history should be recorded against, if the client that started
+        # it supplied one (see app.orchestration.job_preparation_persistence
+        # and StartConversationRequest.job_preparation_id) -- optional,
+        # and never re-sent by the client on /answer since it's carried
+        # here instead, the same way job_description already is.
+        self.job_preparation_id = job_preparation_id
         self.history: list[ConversationExchange] = []
         self.current_question: ConversationQuestion | None = None
         self.status = ConversationSessionStatus.IN_PROGRESS
@@ -80,6 +89,7 @@ class ConversationSession:
         resume: str,
         job_description: str,
         resume_analysis: ResumeAnalysisResult,
+        job_preparation_id: UUID | None = None,
     ) -> "ConversationSession":
         """Construct a fresh, in-progress session with a newly generated ID."""
         return cls(
@@ -87,6 +97,7 @@ class ConversationSession:
             resume=resume,
             job_description=job_description,
             resume_analysis=resume_analysis,
+            job_preparation_id=job_preparation_id,
         )
 
     @property

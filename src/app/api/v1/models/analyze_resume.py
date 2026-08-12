@@ -12,6 +12,8 @@ current nested shape field-for-field, but each model here is its own type
 so that coincidence isn't mistaken for coupling.
 """
 
+from uuid import UUID
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -108,4 +110,16 @@ class AnalyzeResumeResponse(BaseModel):
     )
     resume_improvements: list[ResumeImprovementResponse] = Field(
         description="Recommended improvements to the resume."
+    )
+    job_preparation_id: UUID | None = Field(
+        default=None,
+        description=(
+            "The durable JobPreparation this analysis was recorded against (see "
+            "docs/persistent-backend-workflow-state.md). Null only if this response was "
+            "produced by /reanalyze (which reuses this same response shape but does not "
+            "itself create a JobPreparation -- see ReanalyzeResponse). Existing clients that "
+            "don't read this field are unaffected; passing it back to /career-conversation or "
+            "/tailoring-suggestions lets later workflow steps attach their own durable state "
+            "to the same preparation -- entirely optional."
+        ),
     )
