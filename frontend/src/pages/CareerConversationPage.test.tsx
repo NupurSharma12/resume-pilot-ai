@@ -65,6 +65,8 @@ function makeResumeSessionValue(
     setPostApplyComparison: vi.fn(),
     postApplyAnalysisStatus: 'idle',
     setPostApplyAnalysisStatus: vi.fn(),
+    jobPreparationId: null,
+    setJobPreparationId: vi.fn(),
     clearSession: vi.fn(),
     ...overrides,
   }
@@ -160,6 +162,27 @@ describe('CareerConversationPage restoration', () => {
     await waitFor(() => expect(mockedApi.startCareerConversation).toHaveBeenCalledTimes(1))
     expect(mockedApi.getCareerConversation).not.toHaveBeenCalled()
     expect(setActiveCareerConversationSessionId).toHaveBeenCalledWith(fixtureSession.session_id)
+  })
+
+  it('threads the session jobPreparationId through to startCareerConversation', async () => {
+    mockedUseResumeSession.mockReturnValue(
+      makeResumeSessionValue({
+        activeCareerConversationSessionId: null,
+        jobPreparationId: 'job-prep-1',
+      }),
+    )
+    mockedApi.startCareerConversation.mockResolvedValue(fixtureSession)
+
+    renderPage()
+
+    await waitFor(() =>
+      expect(mockedApi.startCareerConversation).toHaveBeenCalledWith(
+        fixtureResume.text,
+        fixtureJobDescription.text,
+        fixtureResumeAnalysis,
+        'job-prep-1',
+      ),
+    )
   })
 
   it('on a stale (404) session id, clears only the id and shows a recovery action instead of silently starting a new conversation', async () => {

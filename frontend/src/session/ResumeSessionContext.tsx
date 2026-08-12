@@ -89,6 +89,11 @@ export interface ResumeSessionContextValue {
   postApplyAnalysisStatus: PostApplyAnalysisStatus
   setPostApplyAnalysisStatus: (status: PostApplyAnalysisStatus) => void
 
+  // The durable JobPreparation this session is recorded against -- see
+  // resumeSessionTypes.ts's `PersistedResumeSession.jobPreparationId`.
+  jobPreparationId: string | null
+  setJobPreparationId: (id: string | null) => void
+
   clearSession: () => void
 }
 
@@ -137,6 +142,8 @@ export function ResumeSessionProvider({
   const [postApplyAnalysisStatus, setPostApplyAnalysisStatus] =
     useState<PostApplyAnalysisStatus>('idle')
 
+  const [jobPreparationId, setJobPreparationId] = useState<string | null>(null)
+
   // Reads storage exactly once. Guarded with a ref (not just an empty
   // dependency array) so React 18 StrictMode's dev-only double effect
   // invocation can't apply a stale second `storage.load()` result on top --
@@ -169,6 +176,7 @@ export function ResumeSessionProvider({
       setPostApplyAnalysis(persisted.postApplyAnalysis)
       setPostApplyComparison(persisted.postApplyComparison)
       setPostApplyAnalysisStatus(persisted.postApplyAnalysisStatus)
+      setJobPreparationId(persisted.jobPreparationId)
     }
     setHydrationStatus('hydrated')
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -200,6 +208,7 @@ export function ResumeSessionProvider({
       postApplyAnalysis,
       postApplyComparison,
       postApplyAnalysisStatus: normalizePostApplyAnalysisStatus(postApplyAnalysisStatus),
+      jobPreparationId,
     })
   }, [
     hydrationStatus,
@@ -221,6 +230,7 @@ export function ResumeSessionProvider({
     postApplyAnalysis,
     postApplyComparison,
     postApplyAnalysisStatus,
+    jobPreparationId,
     storage,
   ])
 
@@ -243,6 +253,7 @@ export function ResumeSessionProvider({
     setPostApplyAnalysis(null)
     setPostApplyComparison(null)
     setPostApplyAnalysisStatus('idle')
+    setJobPreparationId(null)
     storage.clear()
   }
 
@@ -284,6 +295,8 @@ export function ResumeSessionProvider({
     setPostApplyComparison,
     postApplyAnalysisStatus,
     setPostApplyAnalysisStatus,
+    jobPreparationId,
+    setJobPreparationId,
     clearSession,
   }
 

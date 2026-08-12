@@ -10,11 +10,16 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 // `StartConversationRequest.resume_analysis` reuses the same
 // `AnalyzeResumeResponse` shape (see the endpoint's own docstring), so no
 // mapping is needed here either, matching `analyzeResume`'s "no
-// transformation layer" precedent.
+// transformation layer" precedent. `jobPreparationId` (from the same
+// `analyzeResume` call, via session state) is threaded through so the
+// backend attaches this conversation's durable history to the same
+// JobPreparation -- omitted entirely (not sent as `null`) when there
+// isn't one, since the backend field is optional.
 export async function startCareerConversation(
   resume: string,
   jobDescription: string,
   resumeAnalysis: ResumeAnalysisResult,
+  jobPreparationId: string | null,
 ): Promise<ConversationSessionState> {
   let response: Response
   try {
@@ -25,6 +30,7 @@ export async function startCareerConversation(
         resume,
         job_description: jobDescription,
         resume_analysis: resumeAnalysis,
+        ...(jobPreparationId !== null ? { job_preparation_id: jobPreparationId } : {}),
       }),
     })
   } catch {

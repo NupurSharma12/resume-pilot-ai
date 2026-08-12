@@ -75,6 +75,7 @@ function isSupportedPersistedSession(value: unknown): value is PersistedResumeSe
   if (value.postApplyAnalysisStatus !== 'idle' && value.postApplyAnalysisStatus !== 'error') {
     return false
   }
+  if (value.jobPreparationId !== null && typeof value.jobPreparationId !== 'string') return false
   return true
 }
 

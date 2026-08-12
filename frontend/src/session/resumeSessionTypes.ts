@@ -45,14 +45,14 @@ export type PersistedTailoringPlanStatus = 'idle' | 'error'
 export type PostApplyAnalysisStatus = 'idle' | 'reanalyzing' | 'error'
 export type PersistedPostApplyAnalysisStatus = 'idle' | 'error'
 
-// Bumped from 3: adds the Post-Apply Analysis Loop's `postApplyAnalysis`/
-// `postApplyComparison`/`postApplyAnalysisStatus` fields (see
-// docs/features/postapply-analysis-loop.md). Same reasoning as the
-// previous bump (2 -> 3): a session persisted by a prior build never had
-// these fields at all, so it must fail `isSupportedPersistedSession` and
-// be discarded rather than partially rehydrating into a shape this
-// version doesn't expect.
-export const RESUME_SESSION_VERSION = 4 as const
+// Bumped from 4: adds `jobPreparationId`, the durable JobPreparation this
+// session's backend-persisted history (see docs/persistent-backend-workflow-state.md
+// and the Job Preparation Checkpoints work) is recorded against, once
+// POST /v1/analyze returns one. Same reasoning as every previous bump: a
+// session persisted by a prior build never had this field at all, so it
+// must fail `isSupportedPersistedSession` and be discarded rather than
+// partially rehydrating into a shape this version doesn't expect.
+export const RESUME_SESSION_VERSION = 5 as const
 
 // A compact record of the last successfully applied final resume —
 // deliberately just the rendered text and which suggestions produced it,
@@ -99,6 +99,13 @@ export interface PersistedResumeSession {
   postApplyAnalysis: ResumeAnalysisResult | null
   postApplyComparison: ResumeAnalysisComparison | null
   postApplyAnalysisStatus: PersistedPostApplyAnalysisStatus
+  // The durable JobPreparation this session is recorded against on the
+  // backend, once POST /v1/analyze returns one -- null before the first
+  // analysis, or if persistence itself is unavailable. Threaded forward
+  // to /career-conversation and /tailoring-suggestions (generate) so
+  // their own durable history attaches to the same preparation; never
+  // re-derived or guessed, only ever set from a backend response.
+  jobPreparationId: string | null
 }
 
 // Small and framework-independent on purpose: today's implementation reads

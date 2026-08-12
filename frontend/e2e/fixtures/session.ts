@@ -19,7 +19,7 @@ const STORAGE_KEY = 'resumepilot.resumeSession.v1'
 // mismatch here doesn't fail loudly, it just makes
 // isSupportedPersistedSession discard this seeded session as an
 // unsupported version, the same as a stale session from a prior build.
-const RESUME_SESSION_VERSION = 4 as const
+const RESUME_SESSION_VERSION = 5 as const
 
 export const SAMPLE_RESUME_TEXT = [
   'SUMMARY',
@@ -149,6 +149,7 @@ function basePersistedSession(): PersistedResumeSession {
     postApplyAnalysis: null,
     postApplyComparison: null,
     postApplyAnalysisStatus: 'idle',
+    jobPreparationId: null,
   }
 }
 

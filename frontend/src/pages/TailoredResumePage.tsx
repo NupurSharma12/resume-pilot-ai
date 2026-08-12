@@ -84,6 +84,7 @@ export default function TailoredResumePage() {
     setPostApplyComparison,
     postApplyAnalysisStatus,
     setPostApplyAnalysisStatus,
+    jobPreparationId,
   } = useResumeSession()
 
   const [generateError, setGenerateError] = useState('')
@@ -167,6 +168,7 @@ export default function TailoredResumePage() {
         session,
         tailoringCustomInstructions,
         resume.fileName,
+        jobPreparationId,
       )
       setTailoringPlan(plan)
       setTailoringPlanStatus('idle')
@@ -216,6 +218,7 @@ export default function TailoredResumePage() {
     setPostApplyComparison,
     setPostApplyAnalysisStatus,
     setTailoringSourceFormat,
+    jobPreparationId,
   ])
 
   // Selecting a suggestion that's mutually exclusive with one already
@@ -362,6 +365,7 @@ export default function TailoredResumePage() {
         session,
         tailoringCustomInstructions,
         resume.fileName,
+        jobPreparationId,
       )
     } catch {
       // Regeneration itself failed -- this is the one case the user
