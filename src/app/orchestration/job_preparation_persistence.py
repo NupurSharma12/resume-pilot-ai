@@ -114,7 +114,11 @@ async def start_job_preparation(
     )
     return await store.save_job_preparation(
         job_preparation.model_copy(
-            update={"analysis_result": analysis_result, "status": JobPreparationStatus.ACTIVE}
+            update={
+                "analysis_result": analysis_result,
+                "initial_analysis_completed_at": datetime.now(UTC),
+                "status": JobPreparationStatus.ACTIVE,
+            }
         )
     )
 
@@ -131,7 +135,12 @@ async def record_career_conversation(
     """
     current = await _require_job_preparation(store, job_preparation_id)
     return await store.save_job_preparation(
-        current.model_copy(update={"career_conversation": career_conversation})
+        current.model_copy(
+            update={
+                "career_conversation": career_conversation,
+                "career_conversation_completed_at": datetime.now(UTC),
+            }
+        )
     )
 
 
@@ -148,7 +157,10 @@ async def record_generated_tailoring_plan(
     current = await _require_job_preparation(store, job_preparation_id)
     return await store.save_job_preparation(
         current.model_copy(
-            update={"tailoring_plan": {"generated_plan": generated_plan, "selection": None}}
+            update={
+                "tailoring_plan": {"generated_plan": generated_plan, "selection": None},
+                "tailoring_plan_completed_at": datetime.now(UTC),
+            }
         )
     )
 
@@ -163,13 +175,18 @@ async def record_applied_tailoring_selection(
 ) -> JobPreparation:
     """Boundary E (second half) + F: record the user's choices and the one applied version.
 
-    Creates exactly one new `ResumeVersion` (`source=applied`) for this
-    apply call, on the same `Resume` the preparation's `source_resume_version_id`
-    belongs to, and points `applied_resume_version_id` at it — the current
-    application's one blended `/apply` result, never a separate
-    tailoring-only/user-edit-only pair (see `ResumeVersionSource`'s
-    docstring). Preserves whatever `generated_plan` was already stored;
-    only `selection` changes here.
+    The "Tailored Resume" checkpoint. Delegates entirely to
+    `PersistenceStore.apply_resume_version` rather than a
+    create-then-save sequence here: creating the new `ResumeVersion`
+    (`source=applied` — the current application's one blended `/apply`
+    result, never a separate tailoring-only/user-edit-only pair, see
+    `ResumeVersionSource`'s docstring) and updating
+    `applied_resume_version_id`/`applied_at`/`tailoring_plan.selection`
+    must succeed or fail together -- see the Job Preparation Checkpoints
+    design review's atomicity analysis for why this is the one boundary
+    that needs store-level atomicity rather than two independent
+    orchestration-level calls. `generated_plan` is preserved by the store
+    method; only `selection` changes here.
 
     Each call to this function (e.g. each phase of a phased apply, or a
     later re-apply after more suggestions are picked) creates its own new
@@ -179,36 +196,11 @@ async def record_applied_tailoring_selection(
     report's "idempotency" section for why that is a deliberate,
     documented non-goal here, not an oversight).
     """
-    current = await _require_job_preparation(store, job_preparation_id)
-    source_version = await store.get_resume_version(current.source_resume_version_id)
-    if source_version is None:
-        # Defensive only: `create_job_preparation` already guarantees
-        # `source_resume_version_id` exists at creation time, and nothing
-        # in this application ever deletes a `ResumeVersion`.
-        raise JobPreparationNotFoundError(
-            f"Job preparation {job_preparation_id!r}'s source resume version "
-            f"{current.source_resume_version_id!r} no longer exists."
-        )
-
-    applied_version = await store.create_resume_version(
-        source_version.resume_id, content=applied_resume_text, source=ResumeVersionSource.APPLIED
-    )
-
-    generated_plan = (current.tailoring_plan or {}).get("generated_plan")
-    updated_tailoring_plan = {
-        "generated_plan": generated_plan,
-        "selection": {
-            "selected_suggestion_ids": selected_suggestion_ids,
-            "edited_texts": edited_texts,
-        },
-    }
-    return await store.save_job_preparation(
-        current.model_copy(
-            update={
-                "applied_resume_version_id": applied_version.id,
-                "tailoring_plan": updated_tailoring_plan,
-            }
-        )
+    return await store.apply_resume_version(
+        job_preparation_id,
+        content=applied_resume_text,
+        selected_suggestion_ids=selected_suggestion_ids,
+        edited_texts=edited_texts,
     )
 
 
@@ -226,14 +218,16 @@ async def record_post_apply_analysis(
     is stamped here, at persistence time, not taken from any caller input.
     """
     current = await _require_job_preparation(store, job_preparation_id)
+    now = datetime.now(UTC)
     return await store.save_job_preparation(
         current.model_copy(
             update={
                 "post_apply_analysis": {
                     "analysis": analysis,
                     "comparison": comparison,
-                    "reanalyzed_at": datetime.now(UTC).isoformat(),
-                }
+                    "reanalyzed_at": now.isoformat(),
+                },
+                "post_apply_analysis_completed_at": now,
             }
         )
     )

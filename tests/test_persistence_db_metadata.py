@@ -193,3 +193,42 @@ class TestJobPreparationsTable:
     def test_updated_at_has_an_onupdate_mechanism_configured(self) -> None:
         column = Base.metadata.tables["job_preparations"].c.updated_at
         assert column.onupdate is not None
+
+    def test_checkpoint_completion_timestamps_are_nullable_timestamptz(self) -> None:
+        table = Base.metadata.tables["job_preparations"]
+        for column_name in (
+            "initial_analysis_completed_at",
+            "career_conversation_completed_at",
+            "tailoring_plan_completed_at",
+            "applied_at",
+            "post_apply_analysis_completed_at",
+        ):
+            column = table.c[column_name]
+            assert isinstance(column.type, TIMESTAMP), column_name
+            assert column.type.timezone is True, column_name
+            assert column.nullable is True, column_name
+            # Unlike created_at/updated_at, a checkpoint timestamp has no
+            # server_default -- it is only ever set explicitly, by the
+            # orchestration layer, in the same write as its payload/FK.
+            assert column.server_default is None, column_name
+
+    def test_checkpoint_consistency_check_constraints_exist(self) -> None:
+        texts = _check_constraint_texts(Base.metadata.tables["job_preparations"])
+        expected = [
+            ("analysis_result IS NOT NULL", "initial_analysis_completed_at IS NOT NULL"),
+            (
+                "career_conversation IS NOT NULL",
+                "career_conversation_completed_at IS NOT NULL",
+            ),
+            ("tailoring_plan IS NOT NULL", "tailoring_plan_completed_at IS NOT NULL"),
+            ("applied_resume_version_id IS NOT NULL", "applied_at IS NOT NULL"),
+            (
+                "post_apply_analysis IS NOT NULL",
+                "post_apply_analysis_completed_at IS NOT NULL",
+            ),
+        ]
+        for payload_clause, timestamp_clause in expected:
+            assert any(payload_clause in text and timestamp_clause in text for text in texts), (
+                payload_clause,
+                timestamp_clause,
+            )

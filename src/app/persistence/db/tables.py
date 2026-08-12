@@ -118,11 +118,51 @@ class JobPreparationRow(Base):
     # Each mirrors the equivalent field on app.persistence.models.JobPreparation
     # exactly -- see that module's docstring for the two composite JSONB
     # shapes agreed for tailoring_plan/post_apply_analysis.
-    analysis_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    career_conversation: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    tailoring_plan: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    post_apply_analysis: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    interview_preparation: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    #
+    # `none_as_null=True` is load-bearing, not cosmetic: SQLAlchemy's JSON/
+    # JSONB type defaults to encoding a Python `None` as the JSON literal
+    # `null` (a real, non-NULL JSONB value equal to `'null'::jsonb`), not
+    # SQL `NULL` -- a well-known SQLAlchemy gotcha. Without this flag, a
+    # freshly created JobPreparation (every payload column still logically
+    # "not set yet") would store `'null'::jsonb` in each column, which
+    # `IS NOT NULL` (used by the checkpoint-consistency CHECK constraints
+    # below, and by any future JSONB-column existence query) would
+    # incorrectly treat as *present*. `none_as_null=True` makes Python
+    # `None` persist as true SQL `NULL`, matching what "no payload yet"
+    # actually means -- Python-level reads are unaffected either way
+    # (asyncpg decodes both SQL NULL and JSON null back to Python `None`).
+    analysis_result: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    career_conversation: Mapped[dict | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    tailoring_plan: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    post_apply_analysis: Mapped[dict | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+    interview_preparation: Mapped[dict | None] = mapped_column(
+        JSONB(none_as_null=True), nullable=True
+    )
+
+    # Five independent checkpoint-completion timestamps -- see
+    # app.persistence.models.JobPreparation's docstring for why five, not
+    # four, and why each is always written in the same UPDATE as its
+    # paired column above. The CHECK constraints below (mirroring
+    # ck_job_preparations_completed_requires_applied_version's existing
+    # style) enforce at the database level that a timestamp and its
+    # payload/FK can never disagree -- see this table's __table_args__.
+    initial_analysis_completed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    career_conversation_completed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    tailoring_plan_completed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    applied_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    post_apply_analysis_completed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
 
     # V1 allowed values: 'draft', 'active', 'completed' -- see
     # ck_job_preparations_status_allowed_values below.
@@ -144,6 +184,29 @@ class JobPreparationRow(Base):
         CheckConstraint(
             "status IN ('draft', 'active', 'completed')",
             name="status_allowed_values",
+        ),
+        # Checkpoint consistency: a completion timestamp exists if and
+        # only if its corresponding durable payload/FK does. See
+        # app.persistence.models.JobPreparation's docstring.
+        CheckConstraint(
+            "(analysis_result IS NOT NULL) = (initial_analysis_completed_at IS NOT NULL)",
+            name="initial_analysis_checkpoint_consistent",
+        ),
+        CheckConstraint(
+            "(career_conversation IS NOT NULL) = (career_conversation_completed_at IS NOT NULL)",
+            name="career_conversation_checkpoint_consistent",
+        ),
+        CheckConstraint(
+            "(tailoring_plan IS NOT NULL) = (tailoring_plan_completed_at IS NOT NULL)",
+            name="tailoring_plan_checkpoint_consistent",
+        ),
+        CheckConstraint(
+            "(applied_resume_version_id IS NOT NULL) = (applied_at IS NOT NULL)",
+            name="applied_checkpoint_consistent",
+        ),
+        CheckConstraint(
+            "(post_apply_analysis IS NOT NULL) = (post_apply_analysis_completed_at IS NOT NULL)",
+            name="post_apply_analysis_checkpoint_consistent",
         ),
         Index("ix_job_preparations_source_resume_version_id", "source_resume_version_id"),
         Index("ix_job_preparations_applied_resume_version_id", "applied_resume_version_id"),

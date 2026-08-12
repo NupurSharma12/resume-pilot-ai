@@ -39,6 +39,7 @@ of the `PersistenceStore` contract itself:
 
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 import pytest
 
@@ -329,12 +330,14 @@ async def test_save_job_preparation_persists_updated_fields(store: PersistenceSt
             update={
                 "status": JobPreparationStatus.ACTIVE,
                 "analysis_result": {"overall_assessment": {"overall_score": 72}},
+                "initial_analysis_completed_at": datetime.now(UTC),
             }
         )
     )
 
     assert updated.status == JobPreparationStatus.ACTIVE
     assert updated.analysis_result == {"overall_assessment": {"overall_score": 72}}
+    assert updated.initial_analysis_completed_at is not None
     assert await store.get_job_preparation(preparation.id) == updated
 
 
@@ -421,6 +424,7 @@ async def test_draft_to_active_to_completed_lifecycle(store: PersistenceStore) -
             update={
                 "status": JobPreparationStatus.COMPLETED,
                 "applied_resume_version_id": applied.id,
+                "applied_at": datetime.now(UTC),
             }
         )
     )
@@ -443,6 +447,7 @@ async def test_completed_preparation_cannot_be_saved_again(store: PersistenceSto
             update={
                 "status": JobPreparationStatus.COMPLETED,
                 "applied_resume_version_id": applied.id,
+                "applied_at": datetime.now(UTC),
             }
         )
     )
@@ -488,7 +493,9 @@ async def test_json_fields_round_trip_nested_structures_faithfully(
         preparation.model_copy(
             update={
                 "tailoring_plan": tailoring_plan,
+                "tailoring_plan_completed_at": datetime.now(UTC),
                 "post_apply_analysis": post_apply_analysis,
+                "post_apply_analysis_completed_at": datetime.now(UTC),
             }
         )
     )

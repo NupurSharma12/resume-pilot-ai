@@ -61,6 +61,7 @@ an ordinary, expected `PersistenceError`.
 """
 
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -123,6 +124,11 @@ def _job_preparation_from_row(row: JobPreparationRow) -> JobPreparation:
         tailoring_plan=row.tailoring_plan,
         post_apply_analysis=row.post_apply_analysis,
         interview_preparation=row.interview_preparation,
+        initial_analysis_completed_at=row.initial_analysis_completed_at,
+        career_conversation_completed_at=row.career_conversation_completed_at,
+        tailoring_plan_completed_at=row.tailoring_plan_completed_at,
+        applied_at=row.applied_at,
+        post_apply_analysis_completed_at=row.post_apply_analysis_completed_at,
         status=JobPreparationStatus(row.status),
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -265,6 +271,11 @@ class PostgresPersistenceStore:
                 tailoring_plan=None,
                 post_apply_analysis=None,
                 interview_preparation=None,
+                initial_analysis_completed_at=None,
+                career_conversation_completed_at=None,
+                tailoring_plan_completed_at=None,
+                applied_at=None,
+                post_apply_analysis_completed_at=None,
                 status=JobPreparationStatus.DRAFT.value,
             )
             session.add(row)
@@ -339,6 +350,15 @@ class PostgresPersistenceStore:
             current.tailoring_plan = job_preparation.tailoring_plan
             current.post_apply_analysis = job_preparation.post_apply_analysis
             current.interview_preparation = job_preparation.interview_preparation
+            current.initial_analysis_completed_at = job_preparation.initial_analysis_completed_at
+            current.career_conversation_completed_at = (
+                job_preparation.career_conversation_completed_at
+            )
+            current.tailoring_plan_completed_at = job_preparation.tailoring_plan_completed_at
+            current.applied_at = job_preparation.applied_at
+            current.post_apply_analysis_completed_at = (
+                job_preparation.post_apply_analysis_completed_at
+            )
             current.status = job_preparation.status.value
             current.created_at = job_preparation.created_at
 
@@ -358,3 +378,114 @@ class PostgresPersistenceStore:
                 raise
             await session.refresh(current)
             return _job_preparation_from_row(current)
+
+    async def apply_resume_version(
+        self,
+        job_preparation_id: uuid.UUID,
+        *,
+        content: str,
+        selected_suggestion_ids: list[str],
+        edited_texts: dict[str, str],
+    ) -> JobPreparation:
+        async with self._session_factory() as session, session.begin():
+            # Same SELECT ... FOR UPDATE reasoning as save_job_preparation:
+            # locks this row for the rest of the transaction so a
+            # concurrent apply/save against the same preparation can't
+            # race the "not already completed" check below.
+            current = (
+                await session.execute(
+                    select(JobPreparationRow)
+                    .where(JobPreparationRow.id == job_preparation_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if current is None:
+                raise JobPreparationNotFoundError(
+                    f"No job preparation with id {job_preparation_id!r}."
+                )
+            if current.status == JobPreparationStatus.COMPLETED.value:
+                raise JobPreparationCompletedError(
+                    f"Job preparation {job_preparation_id!r} is already completed and is "
+                    "read-only history -- it cannot be saved again."
+                )
+
+            # `source_resume_version_id` is guaranteed to exist --
+            # `create_job_preparation` requires it, and nothing in this
+            # application ever deletes a `ResumeVersion`.
+            source_version = await session.get(ResumeVersionRow, current.source_resume_version_id)
+            resume_id = source_version.resume_id
+
+            max_version_number = await session.scalar(
+                select(func.max(ResumeVersionRow.version_number)).where(
+                    ResumeVersionRow.resume_id == resume_id
+                )
+            )
+            next_version_number = (max_version_number or 0) + 1
+            version_row = ResumeVersionRow(
+                id=uuid.uuid4(),
+                resume_id=resume_id,
+                version_number=next_version_number,
+                content=content,
+                source=ResumeVersionSource.APPLIED.value,
+            )
+            session.add(version_row)
+            try:
+                # Flushed (not just added) before the JobPreparationRow
+                # update below, in the same transaction -- so the FK from
+                # applied_resume_version_id to this row is satisfied by
+                # the time that update is flushed too, and the whole
+                # transaction commits (or rolls back) as one unit: either
+                # both the new version and the updated preparation are
+                # durably visible, or neither is.
+                await session.flush()
+            except IntegrityError as exc:
+                if _constraint_name(exc) == _UNIQUE_RESUME_VERSION:
+                    raise ConcurrentResumeVersionConflictError(
+                        f"Lost a race to create version_number={next_version_number} for "
+                        f"resume {resume_id!r} -- another version was committed first. "
+                        "Retry apply_resume_version()."
+                    ) from exc
+                raise
+            await session.refresh(version_row)
+
+            now = datetime.now(UTC)
+            generated_plan = (current.tailoring_plan or {}).get("generated_plan")
+            current.applied_resume_version_id = version_row.id
+            current.applied_at = now
+            current.tailoring_plan = {
+                "generated_plan": generated_plan,
+                "selection": {
+                    "selected_suggestion_ids": selected_suggestion_ids,
+                    "edited_texts": edited_texts,
+                },
+            }
+            await session.flush()
+            await session.refresh(current)
+            return _job_preparation_from_row(current)
+
+    async def list_job_preparations(
+        self,
+        *,
+        resume_id: uuid.UUID | None = None,
+        company: str | None = None,
+        job_title: str | None = None,
+        updated_after: datetime | None = None,
+        limit: int = 50,
+    ) -> list[JobPreparation]:
+        async with self._session_factory() as session:
+            query = select(JobPreparationRow)
+            if resume_id is not None:
+                query = query.join(
+                    ResumeVersionRow,
+                    JobPreparationRow.source_resume_version_id == ResumeVersionRow.id,
+                ).where(ResumeVersionRow.resume_id == resume_id)
+            if company is not None:
+                query = query.where(JobPreparationRow.company == company)
+            if job_title is not None:
+                query = query.where(JobPreparationRow.job_title == job_title)
+            if updated_after is not None:
+                query = query.where(JobPreparationRow.updated_at > updated_after)
+            query = query.order_by(JobPreparationRow.updated_at.desc()).limit(limit)
+
+            rows = (await session.scalars(query)).all()
+            return [_job_preparation_from_row(row) for row in rows]
