@@ -7,6 +7,7 @@ import HistoryPage from './pages/HistoryPage'
 import SettingsPage from './pages/SettingsPage'
 import CareerConversationPage from './pages/CareerConversationPage'
 import TailoredResumePage from './pages/TailoredResumePage'
+import InterviewPreparationPage from './pages/InterviewPreparationPage'
 import { ResumeSessionProvider } from './session/ResumeSessionContext'
 
 function App() {
@@ -25,6 +26,7 @@ function App() {
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/career-conversation" element={<CareerConversationPage />} />
           <Route path="/tailored-resume" element={<TailoredResumePage />} />
+          <Route path="/interview-preparation" element={<InterviewPreparationPage />} />
         </Route>
       </Routes>
     </ResumeSessionProvider>

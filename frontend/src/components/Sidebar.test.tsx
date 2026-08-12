@@ -74,6 +74,36 @@ describe('Sidebar Tailored Resume nav item', () => {
   })
 })
 
+describe('Sidebar Interview Preparation nav item', () => {
+  it('is disabled when there is no resume analysis yet', () => {
+    renderSidebar(null)
+
+    expect(screen.queryByRole('link', { name: /interview preparation/i })).not.toBeInTheDocument()
+    expect(screen.getByText('Interview Preparation')).toBeInTheDocument()
+  })
+
+  it('is enabled and routes to /interview-preparation once a resume analysis exists', async () => {
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route
+            path="/"
+            element={<Sidebar resumeAnalysis={fixtureResumeAnalysis} postApplyComparison={null} />}
+          />
+          <Route path="/interview-preparation" element={<div>Interview Preparation Page</div>} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    const link = screen.getByRole('link', { name: /interview preparation/i })
+    expect(link).toHaveAttribute('href', '/interview-preparation')
+
+    fireEvent.click(link)
+
+    await waitFor(() => expect(screen.getByText('Interview Preparation Page')).toBeInTheDocument())
+  })
+})
+
 describe('Sidebar candidate score', () => {
   it('shows the original analysis score when there is no post-apply comparison yet', () => {
     renderSidebar(fixtureResumeAnalysis, null)

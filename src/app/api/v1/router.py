@@ -4,6 +4,7 @@ from app.api.v1.endpoints import (
     analyze,
     career_conversation,
     health,
+    interview_preparation,
     job_preparation_history,
     tailoring_suggestions,
 )
@@ -14,3 +15,4 @@ api_router.include_router(analyze.router, tags=["analyze"])
 api_router.include_router(career_conversation.router, tags=["career-conversation"])
 api_router.include_router(tailoring_suggestions.router, tags=["tailoring-suggestions"])
 api_router.include_router(job_preparation_history.router, tags=["job-preparation-history"])
+api_router.include_router(interview_preparation.router, tags=["interview-preparation"])

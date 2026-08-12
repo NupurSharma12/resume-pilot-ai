@@ -148,4 +148,5 @@ async def get_job_preparation(
         tailoring_plan=job_preparation.tailoring_plan,
         applied_resume_text=applied_resume_text,
         post_apply_analysis=job_preparation.post_apply_analysis,
+        interview_preparation=job_preparation.interview_preparation,
     )

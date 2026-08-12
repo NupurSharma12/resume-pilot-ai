@@ -1,8 +1,13 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, ArrowLeft, CheckCircle2, Circle, RotateCw } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, CheckCircle2, Circle, RotateCw, Sparkles } from 'lucide-react'
 import TopHeader from '../components/TopHeader'
 import Button from '../components/Button'
-import { getJobPreparation, listJobPreparations } from '../lib/jobPreparationHistoryApi'
+import InterviewPreparationCard from '../components/InterviewPreparationCard'
+import {
+  generateInterviewPreparation,
+  getJobPreparation,
+  listJobPreparations,
+} from '../lib/jobPreparationHistoryApi'
 import { ApiError } from '../lib/api'
 import type {
   CheckpointStatus,
@@ -150,6 +155,7 @@ function ReanalysisSection({ postApplyAnalysis }: { postApplyAnalysis: Record<st
 
 type ListStatus = 'loading' | 'success' | 'error'
 type DetailStatus = 'loading' | 'success' | 'error'
+type GenerationStatus = 'idle' | 'generating' | 'error'
 
 export default function HistoryPage() {
   const [items, setItems] = useState<JobPreparationSummary[]>([])
@@ -160,6 +166,9 @@ export default function HistoryPage() {
   const [detail, setDetail] = useState<JobPreparationDetail | null>(null)
   const [detailStatus, setDetailStatus] = useState<DetailStatus>('loading')
   const [detailError, setDetailError] = useState('')
+
+  const [generationStatus, setGenerationStatus] = useState<GenerationStatus>('idle')
+  const [generationError, setGenerationError] = useState('')
 
   async function loadList() {
     setListStatus('loading')
@@ -183,6 +192,8 @@ export default function HistoryPage() {
     setDetail(null)
     setDetailStatus('loading')
     setDetailError('')
+    setGenerationStatus('idle')
+    setGenerationError('')
     try {
       const result = await getJobPreparation(id)
       setDetail(result)
@@ -196,6 +207,20 @@ export default function HistoryPage() {
   function backToList() {
     setSelectedId(null)
     setDetail(null)
+  }
+
+  async function handleGenerateInterviewPreparation() {
+    if (!selectedId) return
+    setGenerationStatus('generating')
+    setGenerationError('')
+    try {
+      const result = await generateInterviewPreparation(selectedId)
+      setDetail((current) => (current ? { ...current, interview_preparation: result } : current))
+      setGenerationStatus('idle')
+    } catch (err) {
+      setGenerationError(err instanceof ApiError ? err.message : 'An unexpected error occurred.')
+      setGenerationStatus('error')
+    }
   }
 
   if (selectedId !== null) {
@@ -259,6 +284,31 @@ export default function HistoryPage() {
               )}
               {detail.post_apply_analysis && (
                 <ReanalysisSection postApplyAnalysis={detail.post_apply_analysis} />
+              )}
+
+              {detail.interview_preparation ? (
+                <InterviewPreparationCard interviewPreparation={detail.interview_preparation} />
+              ) : (
+                <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-6 text-center">
+                  <p className="text-sm text-gray-500">No interview preparation guide yet.</p>
+                  {generationStatus === 'error' && (
+                    <p className="mt-2 text-sm text-rose-500">{generationError}</p>
+                  )}
+                  <div className="mt-4">
+                    <Button
+                      variant="solid"
+                      icon={<Sparkles size={16} />}
+                      disabled={generationStatus === 'generating'}
+                      onClick={handleGenerateInterviewPreparation}
+                    >
+                      {generationStatus === 'generating'
+                        ? 'Generating…'
+                        : generationStatus === 'error'
+                          ? 'Try Again'
+                          : 'Generate Interview Preparation'}
+                    </Button>
+                  </div>
+                </div>
               )}
             </>
           )}

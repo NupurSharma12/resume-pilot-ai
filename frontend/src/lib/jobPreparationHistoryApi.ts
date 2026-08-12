@@ -1,4 +1,8 @@
-import type { JobPreparationDetail, JobPreparationSummary } from '../data/jobPreparationHistoryTypes'
+import type {
+  InterviewPreparation,
+  JobPreparationDetail,
+  JobPreparationSummary,
+} from '../data/jobPreparationHistoryTypes'
 import { ApiError } from './api'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
@@ -45,4 +49,42 @@ export async function getJobPreparation(jobPreparationId: string): Promise<JobPr
   }
 
   return (await response.json()) as JobPreparationDetail
+}
+
+// Calls the backend's POST /v1/job-preparations/{id}/interview-preparation
+// -- generates (and persists server-side) the Interview Preparation guide
+// for one job preparation. No request body: the backend derives
+// everything it needs (resume, job description, Career Conversation) from
+// the already-persisted JobPreparation itself (see the endpoint's
+// docstring). `409` means the preparation is already completed and is
+// read-only history, matching the same convention as any other
+// completed-preparation write in this codebase.
+export async function generateInterviewPreparation(
+  jobPreparationId: string,
+): Promise<InterviewPreparation> {
+  let response: Response
+  try {
+    response = await fetch(
+      `${API_BASE_URL}/v1/job-preparations/${jobPreparationId}/interview-preparation`,
+      { method: 'POST' },
+    )
+  } catch {
+    throw new ApiError('Could not reach the interview preparation service. Is the backend running?')
+  }
+
+  if (response.status === 404) {
+    throw new ApiError('This job preparation no longer exists.', { cause: 'not_found' })
+  }
+
+  if (response.status === 409) {
+    throw new ApiError('This job preparation is already completed and is read-only.', {
+      cause: 'conflict',
+    })
+  }
+
+  if (!response.ok) {
+    throw new ApiError(`Generating interview preparation failed (HTTP ${response.status}).`)
+  }
+
+  return (await response.json()) as InterviewPreparation
 }
