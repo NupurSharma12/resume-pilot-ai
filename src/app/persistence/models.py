@@ -123,6 +123,42 @@ class JobPreparation(BaseModel):
         description="Interview-preparation state, serialized, or null. No producer exists yet."
     )
 
+    # Five independent durable checkpoints/recovery points (see the
+    # Job Preparation Checkpoints design review) -- deliberately five,
+    # not four: "Tailored Resume" (applied_at) and "Re-analysis"
+    # (post_apply_analysis_completed_at) are tracked separately because
+    # Apply and Reanalyze are two independent requests that can succeed
+    # or fail independently of each other. Each timestamp is written in
+    # the exact same `save_job_preparation` call as its corresponding
+    # payload/FK below -- never independently -- so a non-null timestamp
+    # always means "this checkpoint's durable payload was actually
+    # persisted," never merely "an attempt was made." NULL means the
+    # checkpoint has not completed; a timestamp means it completed
+    # successfully at that instant. No separate status enum/JSON blob is
+    # used to represent this -- the timestamp itself is the signal.
+    initial_analysis_completed_at: datetime | None = Field(
+        description="When analysis_result was persisted, or null if it hasn't been yet."
+    )
+    career_conversation_completed_at: datetime | None = Field(
+        description="When career_conversation was persisted, or null if it hasn't been yet."
+    )
+    tailoring_plan_completed_at: datetime | None = Field(
+        description=(
+            "When tailoring_plan.generated_plan was first persisted, or null if it hasn't "
+            "been yet. Reflects generation only -- filling in tailoring_plan.selection at "
+            "Apply time does not change this timestamp."
+        )
+    )
+    applied_at: datetime | None = Field(
+        description=(
+            "When applied_resume_version_id was set (the 'Tailored Resume' checkpoint), or "
+            "null if no changes have been applied yet."
+        )
+    )
+    post_apply_analysis_completed_at: datetime | None = Field(
+        description="When post_apply_analysis was persisted, or null if it hasn't been yet."
+    )
+
     status: JobPreparationStatus = Field(description="Current lifecycle state.")
     created_at: datetime = Field(description="When this preparation was created.")
     updated_at: datetime = Field(description="When this preparation was last saved.")

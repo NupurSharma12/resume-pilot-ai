@@ -123,6 +123,11 @@ class InMemoryPersistenceStore:
             tailoring_plan=None,
             post_apply_analysis=None,
             interview_preparation=None,
+            initial_analysis_completed_at=None,
+            career_conversation_completed_at=None,
+            tailoring_plan_completed_at=None,
+            applied_at=None,
+            post_apply_analysis_completed_at=None,
             status=JobPreparationStatus.DRAFT,
             created_at=now,
             updated_at=now,
@@ -164,3 +169,74 @@ class InMemoryPersistenceStore:
         saved = job_preparation.model_copy(update={"updated_at": datetime.now(UTC)})
         self._job_preparations[saved.id] = saved
         return saved
+
+    async def apply_resume_version(
+        self,
+        job_preparation_id: UUID,
+        *,
+        content: str,
+        selected_suggestion_ids: list[str],
+        edited_texts: dict[str, str],
+    ) -> JobPreparation:
+        current = self._job_preparations.get(job_preparation_id)
+        if current is None:
+            raise JobPreparationNotFoundError(f"No job preparation with id {job_preparation_id!r}.")
+        if current.status == JobPreparationStatus.COMPLETED:
+            raise JobPreparationCompletedError(
+                f"Job preparation {job_preparation_id!r} is already completed and is read-only "
+                "history -- it cannot be saved again."
+            )
+
+        # Both mutations below happen with no `await` between them -- a
+        # single-threaded, GIL-serialized sequence is already exactly as
+        # atomic (from any other coroutine's point of view) as
+        # PostgresPersistenceStore's explicit `session.begin()` block. No
+        # lock or transaction object is needed to get that guarantee here.
+        source_resume_id = self._resume_versions[current.source_resume_version_id].resume_id
+        applied_version = await self.create_resume_version(
+            source_resume_id, content=content, source=ResumeVersionSource.APPLIED
+        )
+
+        now = datetime.now(UTC)
+        generated_plan = (current.tailoring_plan or {}).get("generated_plan")
+        updated = current.model_copy(
+            update={
+                "applied_resume_version_id": applied_version.id,
+                "applied_at": now,
+                "tailoring_plan": {
+                    "generated_plan": generated_plan,
+                    "selection": {
+                        "selected_suggestion_ids": selected_suggestion_ids,
+                        "edited_texts": edited_texts,
+                    },
+                },
+                "updated_at": now,
+            }
+        )
+        self._job_preparations[updated.id] = updated
+        return updated
+
+    async def list_job_preparations(
+        self,
+        *,
+        resume_id: UUID | None = None,
+        company: str | None = None,
+        job_title: str | None = None,
+        updated_after: datetime | None = None,
+        limit: int = 50,
+    ) -> list[JobPreparation]:
+        results = list(self._job_preparations.values())
+        if resume_id is not None:
+            results = [
+                jp
+                for jp in results
+                if self._resume_versions[jp.source_resume_version_id].resume_id == resume_id
+            ]
+        if company is not None:
+            results = [jp for jp in results if jp.company == company]
+        if job_title is not None:
+            results = [jp for jp in results if jp.job_title == job_title]
+        if updated_after is not None:
+            results = [jp for jp in results if jp.updated_at > updated_after]
+        results.sort(key=lambda jp: jp.updated_at, reverse=True)
+        return results[:limit]

@@ -39,6 +39,7 @@ module docstrings for why they stay in-memory-only regardless of
 identified as durable product history.
 """
 
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 from uuid import UUID
 
@@ -133,5 +134,68 @@ class PersistenceStore(Protocol):
         `completed` without an `applied_resume_version_id`. Raises
         `ResumeVersionNotFoundError` if `applied_resume_version_id` is
         set but does not reference an existing `ResumeVersion`.
+        """
+        ...
+
+    async def apply_resume_version(
+        self,
+        job_preparation_id: UUID,
+        *,
+        content: str,
+        selected_suggestion_ids: list[str],
+        edited_texts: dict[str, str],
+    ) -> JobPreparation:
+        """Atomically record the one applied `ResumeVersion` for a `JobPreparation`.
+
+        The "Tailored Resume" checkpoint (see `app.persistence.models.
+        JobPreparation`'s docstring): creates a new `ResumeVersion`
+        (`source=applied`) on the same `Resume` as `job_preparation_id`'s
+        `source_resume_version_id`, then updates `job_preparation_id`'s
+        `applied_resume_version_id`, `applied_at`, and
+        `tailoring_plan.selection` (preserving whatever `generated_plan`
+        was already stored) -- all as one durable operation. In
+        PostgreSQL, this is one transaction: either the new version and
+        the updated `JobPreparation` are both visible, or neither is.
+        Exists as its own method (rather than a `create_resume_version`
+        call followed by a separate `save_job_preparation` call, as an
+        orchestration-layer caller would otherwise have to do) precisely
+        because those two writes must not be allowed to partially
+        succeed -- see the Job Preparation Checkpoints design review's
+        atomicity analysis.
+
+        Each call creates its own new `ResumeVersion` and moves
+        `applied_resume_version_id` to point at it -- there is no
+        de-duplication against a repeated/retried call with an identical
+        selection (see `app.orchestration.job_preparation_persistence`'s
+        module docstring for why that is a documented non-goal).
+
+        Raises `JobPreparationNotFoundError` if `job_preparation_id` does
+        not exist, or `JobPreparationCompletedError` if it is already
+        `status=completed`.
+        """
+        ...
+
+    async def list_job_preparations(
+        self,
+        *,
+        resume_id: UUID | None = None,
+        company: str | None = None,
+        job_title: str | None = None,
+        updated_after: datetime | None = None,
+        limit: int = 50,
+    ) -> list[JobPreparation]:
+        """Return `JobPreparation`s matching the given filters, newest-updated first.
+
+        Every filter is optional and exact-match (or, for `updated_after`,
+        a simple lower bound) on a plain column -- never a JSONB/full-text
+        search over `analysis_result`/`career_conversation`/`tailoring_plan`/
+        `post_apply_analysis` (see the Job Preparation Checkpoints design
+        review's explicit search-scope decision). `resume_id` filters via
+        `source_resume_version_id`'s owning resume, not a denormalized
+        column -- `job_preparations` has no `resume_id` column of its own.
+        Always ordered by `updated_at` descending; `limit` bounds the
+        result count (no cursor/offset pagination -- not yet needed by any
+        caller). Returns an empty list if nothing matches, matching this
+        store's existing "absence, not an exception" read convention.
         """
         ...

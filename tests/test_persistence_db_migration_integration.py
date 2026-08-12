@@ -148,6 +148,87 @@ def test_check_constraints_are_present_on_both_tables(migrated_database: str) ->
     prep_check_names = {c["name"] for c in schema["job_preparations"]["check_constraints"]}
     assert "ck_job_preparations_completed_requires_applied_version" in prep_check_names
     assert "ck_job_preparations_status_allowed_values" in prep_check_names
+    assert "ck_job_preparations_initial_analysis_checkpoint_consistent" in prep_check_names
+    assert "ck_job_preparations_career_conversation_checkpoint_consistent" in prep_check_names
+    assert "ck_job_preparations_tailoring_plan_checkpoint_consistent" in prep_check_names
+    assert "ck_job_preparations_applied_checkpoint_consistent" in prep_check_names
+    assert "ck_job_preparations_post_apply_analysis_checkpoint_consistent" in prep_check_names
+
+
+def test_job_preparations_has_the_five_checkpoint_timestamp_columns(
+    migrated_database: str,
+) -> None:
+    schema = asyncio.run(_reflect(migrated_database))
+
+    columns = schema["job_preparations"]["columns"]
+    for column_name in (
+        "initial_analysis_completed_at",
+        "career_conversation_completed_at",
+        "tailoring_plan_completed_at",
+        "applied_at",
+        "post_apply_analysis_completed_at",
+    ):
+        assert column_name in columns, column_name
+        assert columns[column_name]["nullable"] is True, column_name
+
+
+def test_checkpoint_consistency_constraint_rejects_a_payload_without_its_timestamp(
+    migrated_database: str,
+) -> None:
+    """The DB-level safety net: a payload can never be stored without its paired timestamp.
+
+    Exercises the real constraint against the real database with a raw
+    SQLAlchemy Core insert -- deliberately bypassing
+    `PostgresPersistenceStore` (which always pairs them correctly) to
+    prove the constraint itself, not just the application code that
+    happens to respect it, is what prevents an inconsistent checkpoint.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    from app.persistence.db.tables import JobPreparationRow, ResumeRow, ResumeVersionRow
+
+    async def _attempt_inconsistent_insert() -> bool:
+        engine = create_async_engine(migrated_database)
+        try:
+            resume_id = uuid.uuid4()
+            version_id = uuid.uuid4()
+            async with engine.begin() as connection:
+                await connection.execute(
+                    ResumeRow.__table__.insert().values(id=resume_id, name="Alice")
+                )
+                await connection.execute(
+                    ResumeVersionRow.__table__.insert().values(
+                        id=version_id,
+                        resume_id=resume_id,
+                        version_number=1,
+                        content="Original resume text",
+                        source="original_upload",
+                    )
+                )
+            try:
+                async with engine.begin() as connection:
+                    # analysis_result set, but initial_analysis_completed_at
+                    # left null -- exactly the inconsistent state the
+                    # checkpoint model must never allow.
+                    await connection.execute(
+                        JobPreparationRow.__table__.insert().values(
+                            id=uuid.uuid4(),
+                            source_resume_version_id=version_id,
+                            job_title="Backend Engineer",
+                            job_description="Build things.",
+                            analysis_result={"overall_assessment": {"overall_score": 70}},
+                            initial_analysis_completed_at=None,
+                            status="active",
+                        )
+                    )
+                return False
+            except IntegrityError:
+                return True
+        finally:
+            await engine.dispose()
+
+    rejected = asyncio.run(_attempt_inconsistent_insert())
+    assert rejected is True
 
 
 async def _insert_and_bump(url: str) -> tuple:
