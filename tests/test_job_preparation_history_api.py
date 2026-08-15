@@ -179,6 +179,7 @@ async def test_get_returns_the_full_persisted_state_for_a_draft_analysis_only_pr
     body = response.json()
     assert body["id"] == str(job_preparation.id)
     assert body["status"] == "active"
+    assert body["resume_text"] == "SUMMARY\nBackend engineer."
     assert body["analysis_result"] == _ANALYSIS
     assert body["career_conversation"] is None
     assert body["tailoring_plan"] is None

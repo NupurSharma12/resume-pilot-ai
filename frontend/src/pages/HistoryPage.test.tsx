@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import HistoryPage from './HistoryPage'
 import * as jobPreparationHistoryApi from '../lib/jobPreparationHistoryApi'
+import * as resumeSessionContext from '../session/ResumeSessionContext'
 import { ApiError } from '../lib/api'
 import type {
   CheckpointStatus,
@@ -11,8 +13,31 @@ import type {
 } from '../data/jobPreparationHistoryTypes'
 
 vi.mock('../lib/jobPreparationHistoryApi')
+vi.mock('../session/ResumeSessionContext', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../session/ResumeSessionContext')>()
+  return { ...actual, useResumeSession: vi.fn() }
+})
+
+const mockNavigate = vi.fn()
+vi.mock('react-router-dom', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router-dom')>()
+  return { ...actual, useNavigate: () => mockNavigate }
+})
 
 const mockedApi = vi.mocked(jobPreparationHistoryApi)
+const mockedUseResumeSession = vi.mocked(resumeSessionContext.useResumeSession)
+const rehydrateFromHistory = vi.fn()
+
+function renderPage() {
+  mockedUseResumeSession.mockReturnValue({
+    rehydrateFromHistory,
+  } as unknown as resumeSessionContext.ResumeSessionContextValue)
+  return render(
+    <MemoryRouter>
+      <HistoryPage />
+    </MemoryRouter>,
+  )
+}
 
 const fixtureCheckpointsAllComplete: CheckpointStatus = {
   initial_analysis_completed_at: '2026-08-01T10:00:00Z',
@@ -46,6 +71,7 @@ const fixtureDetail: JobPreparationDetail = {
   company: 'Adobe',
   job_description: 'We are hiring a senior engineer.',
   resume_name: 'Senior Engineer Resume',
+  resume_text: 'SUMMARY\nSenior backend engineer.',
   status: 'active',
   created_at: '2026-08-01T09:00:00Z',
   updated_at: '2026-08-12T09:00:00Z',
@@ -105,7 +131,7 @@ describe('HistoryPage', () => {
   it('shows an empty state when there is no history yet', async () => {
     mockedApi.listJobPreparations.mockResolvedValue([])
 
-    render(<HistoryPage />)
+    renderPage()
 
     await waitFor(() =>
       expect(screen.getByText(/analysis history is coming soon/i)).toBeInTheDocument(),
@@ -115,7 +141,7 @@ describe('HistoryPage', () => {
   it('renders each preparation with resume/job/company, last updated, and checkpoints', async () => {
     mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
 
-    render(<HistoryPage />)
+    renderPage()
 
     await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
     expect(screen.getByText(/Senior Engineer Resume/)).toBeInTheDocument()
@@ -134,7 +160,7 @@ describe('HistoryPage', () => {
       { ...fixtureSummary, checkpoints: fixtureCheckpointsPartial },
     ])
 
-    render(<HistoryPage />)
+    renderPage()
 
     await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
     // Complete checkpoints render with the "complete" text styling;
@@ -160,7 +186,7 @@ describe('HistoryPage', () => {
   it('shows a retryable error state when the list fails to load', async () => {
     mockedApi.listJobPreparations.mockRejectedValue(new ApiError('Could not reach the history service.'))
 
-    render(<HistoryPage />)
+    renderPage()
 
     await waitFor(() =>
       expect(screen.getByText('Could not reach the history service.')).toBeInTheDocument(),
@@ -176,10 +202,10 @@ describe('HistoryPage', () => {
     mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
     mockedApi.getJobPreparation.mockResolvedValue(fixtureDetail)
 
-    render(<HistoryPage />)
+    renderPage()
     await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
 
-    fireEvent.click(screen.getByText('Senior Engineer'))
+    fireEvent.click(screen.getByRole('button', { name: 'View Preparation' }))
 
     await waitFor(() => expect(mockedApi.getJobPreparation).toHaveBeenCalledWith('job-prep-1'))
     // Initial Analysis
@@ -211,9 +237,9 @@ describe('HistoryPage', () => {
       post_apply_analysis: null,
     })
 
-    render(<HistoryPage />)
+    renderPage()
     await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('Senior Engineer'))
+    fireEvent.click(screen.getByRole('button', { name: 'View Preparation' }))
 
     await waitFor(() => expect(screen.getByText('72%')).toBeInTheDocument())
     expect(screen.queryByText('Tailoring Plan', { selector: 'h3' })).not.toBeInTheDocument()
@@ -227,9 +253,9 @@ describe('HistoryPage', () => {
       new ApiError('This job preparation no longer exists.', { cause: 'not_found' }),
     )
 
-    render(<HistoryPage />)
+    renderPage()
     await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('Senior Engineer'))
+    fireEvent.click(screen.getByRole('button', { name: 'View Preparation' }))
 
     await waitFor(() =>
       expect(screen.getByText('This job preparation no longer exists.')).toBeInTheDocument(),
@@ -247,9 +273,9 @@ describe('HistoryPage', () => {
     mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
     mockedApi.getJobPreparation.mockResolvedValue(fixtureDetail)
 
-    render(<HistoryPage />)
+    renderPage()
     await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('Senior Engineer'))
+    fireEvent.click(screen.getByRole('button', { name: 'View Preparation' }))
 
     await waitFor(() => expect(screen.getByText('72%')).toBeInTheDocument())
     expect(screen.getByText(/no interview preparation guide yet/i)).toBeInTheDocument()
@@ -265,9 +291,9 @@ describe('HistoryPage', () => {
       interview_preparation: fixtureInterviewPreparation,
     })
 
-    render(<HistoryPage />)
+    renderPage()
     await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('Senior Engineer'))
+    fireEvent.click(screen.getByRole('button', { name: 'View Preparation' }))
 
     await waitFor(() =>
       expect(
@@ -293,9 +319,9 @@ describe('HistoryPage', () => {
       }),
     )
 
-    render(<HistoryPage />)
+    renderPage()
     await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('Senior Engineer'))
+    fireEvent.click(screen.getByRole('button', { name: 'View Preparation' }))
     await waitFor(() => expect(screen.getByText('72%')).toBeInTheDocument())
 
     fireEvent.click(screen.getByRole('button', { name: 'Generate Interview Preparation' }))
@@ -322,9 +348,9 @@ describe('HistoryPage', () => {
       new ApiError('Generating interview preparation failed.'),
     )
 
-    render(<HistoryPage />)
+    renderPage()
     await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('Senior Engineer'))
+    fireEvent.click(screen.getByRole('button', { name: 'View Preparation' }))
     await waitFor(() => expect(screen.getByText('72%')).toBeInTheDocument())
 
     fireEvent.click(screen.getByRole('button', { name: 'Generate Interview Preparation' }))
@@ -343,5 +369,161 @@ describe('HistoryPage', () => {
         screen.getByText('Design a distributed document-analysis pipeline.'),
       ).toBeInTheDocument(),
     )
+  })
+
+  it('requests only the 10 most recent preparations', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+
+    renderPage()
+
+    await waitFor(() => expect(mockedApi.listJobPreparations).toHaveBeenCalledWith({ limit: 10 }))
+  })
+
+  it('filters the list client-side by job title, company, or resume name', async () => {
+    const other: JobPreparationSummary = {
+      ...fixtureSummary,
+      id: 'job-prep-2',
+      job_title: 'Product Manager',
+      company: 'Initech',
+      resume_name: 'PM Resume',
+    }
+    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary, other])
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
+    expect(screen.getByText('Product Manager')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText(/search job preparations/i), {
+      target: { value: 'initech' },
+    })
+
+    await waitFor(() => expect(screen.queryByText('Senior Engineer')).not.toBeInTheDocument())
+    expect(screen.getByText('Product Manager')).toBeInTheDocument()
+  })
+
+  it('shows a no-match state when the search query matches nothing', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
+
+    fireEvent.change(screen.getByLabelText(/search job preparations/i), {
+      target: { value: 'nonexistent role' },
+    })
+
+    await waitFor(() =>
+      expect(screen.getByText(/no preparations match/i)).toBeInTheDocument(),
+    )
+  })
+
+  it('shows both Continue and View for an unfinished preparation', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue([
+      { ...fixtureSummary, checkpoints: fixtureCheckpointsPartial },
+    ])
+
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Continue Preparation' })).toBeInTheDocument(),
+    )
+    expect(screen.getByRole('button', { name: 'View Preparation' })).toBeInTheDocument()
+  })
+
+  it('shows View only (no Continue) for a fully completed preparation', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'View Preparation' })).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Continue Preparation' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('opens a confirmation dialog showing completed checkpoints when Continue is clicked', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue([
+      { ...fixtureSummary, checkpoints: fixtureCheckpointsPartial },
+    ])
+
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Continue Preparation' })).toBeInTheDocument(),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Continue Preparation' }))
+
+    expect(screen.getByText('Continue this preparation?')).toBeInTheDocument()
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('Initial Analysis')).toBeInTheDocument()
+    expect(within(dialog).getByText('Career Conversation')).toBeInTheDocument()
+    expect(mockedApi.getJobPreparation).not.toHaveBeenCalled()
+  })
+
+  it('cancelling the confirmation dialog does not rehydrate or navigate', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue([
+      { ...fixtureSummary, checkpoints: fixtureCheckpointsPartial },
+    ])
+
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Continue Preparation' })).toBeInTheDocument(),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Continue Preparation' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(screen.queryByText('Continue this preparation?')).not.toBeInTheDocument()
+    expect(rehydrateFromHistory).not.toHaveBeenCalled()
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  it('confirming Continue fetches the full detail, rehydrates the session, and navigates to the next stage', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue([
+      { ...fixtureSummary, checkpoints: fixtureCheckpointsPartial },
+    ])
+    mockedApi.getJobPreparation.mockResolvedValue({
+      ...fixtureDetail,
+      checkpoints: fixtureCheckpointsPartial,
+    })
+    rehydrateFromHistory.mockReturnValue('/tailored-resume')
+
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Continue Preparation' })).toBeInTheDocument(),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Continue Preparation' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+
+    await waitFor(() => expect(mockedApi.getJobPreparation).toHaveBeenCalledWith('job-prep-1'))
+    await waitFor(() =>
+      expect(rehydrateFromHistory).toHaveBeenCalledWith({
+        ...fixtureDetail,
+        checkpoints: fixtureCheckpointsPartial,
+      }),
+    )
+    expect(mockNavigate).toHaveBeenCalledWith('/tailored-resume')
+    expect(screen.queryByText('Continue this preparation?')).not.toBeInTheDocument()
+  })
+
+  it('shows a retryable error in the dialog when fetching the detail fails, without closing it', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue([
+      { ...fixtureSummary, checkpoints: fixtureCheckpointsPartial },
+    ])
+    mockedApi.getJobPreparation.mockRejectedValue(
+      new ApiError('This job preparation no longer exists.', { cause: 'not_found' }),
+    )
+
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Continue Preparation' })).toBeInTheDocument(),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Continue Preparation' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('This job preparation no longer exists.')).toBeInTheDocument(),
+    )
+    expect(screen.getByText('Continue this preparation?')).toBeInTheDocument()
+    expect(rehydrateFromHistory).not.toHaveBeenCalled()
+    expect(mockNavigate).not.toHaveBeenCalled()
   })
 })

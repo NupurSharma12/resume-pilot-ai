@@ -22,6 +22,8 @@ import {
   type TailoringPlanStatus,
 } from './resumeSessionTypes'
 import { sessionStorageResumeSessionStorage } from './resumeSessionStorage'
+import { rehydrateFromJobPreparation } from './rehydrateFromJobPreparation'
+import type { JobPreparationDetail } from '../data/jobPreparationHistoryTypes'
 
 // Distinguishes "haven't looked at storage yet" from "looked, found
 // nothing" -- both leave every field `null`/`idle`, but only the latter is
@@ -108,6 +110,23 @@ export interface ResumeSessionContextValue {
   // applied resume, a post-apply comparison) must not linger and leak
   // into the new preparation's own UI. See docs/frontend/resume-session-state.md.
   resetForNewAnalysis: () => void
+
+  // History Resumability: rehydrates every durable field a past
+  // `JobPreparation` can supply -- resume/job description/analysis, the
+  // Career Conversation session id/status, the tailoring plan/selection,
+  // the applied final resume, and any post-apply comparison -- from one
+  // already-fetched `JobPreparationDetail` (the same `GET /v1/job-
+  // preparations/{id}` History's detail view already calls; no new
+  // endpoint). Mirrors `resetForNewAnalysis`'s "pure mapper +
+  // setter-calling wrapper" split: `rehydrateFromJobPreparation`
+  // (session/rehydrateFromJobPreparation.ts) does the actual field
+  // mapping, this just applies its result to the context. Returns the
+  // route the caller should navigate to next, derived from which
+  // checkpoint is the latest one completed -- callers (today, only
+  // HistoryPage's Continue confirmation) navigate there themselves; this
+  // never navigates on its own, matching every other session mutation
+  // here.
+  rehydrateFromHistory: (detail: JobPreparationDetail) => string
 
   clearSession: () => void
 }
@@ -266,6 +285,32 @@ export function ResumeSessionProvider({
     setPostApplyAnalysisStatus('idle')
   }
 
+  function rehydrateFromHistory(detail: JobPreparationDetail): string {
+    const rehydrated = rehydrateFromJobPreparation(detail)
+    setResume(rehydrated.resume)
+    setJobDescription(rehydrated.jobDescription)
+    setResumeAnalysis(rehydrated.resumeAnalysis)
+    setStatus('success')
+    setJobPreparationId(rehydrated.jobPreparationId)
+    setActiveCareerConversationSessionId(rehydrated.activeCareerConversationSessionId)
+    setCareerConversationStatus(rehydrated.careerConversationStatus)
+    setTailoringPlan(rehydrated.tailoringPlan)
+    setTailoringPlanStatus('idle')
+    setTailoringSelections(rehydrated.tailoringSelections)
+    setTailoringCustomInstructions('')
+    setTailoringEditedTexts(rehydrated.tailoringEditedTexts)
+    setTailoringAvailableExportFormats(rehydrated.tailoringAvailableExportFormats)
+    setTailoringSourceFormat(rehydrated.tailoringSourceFormat)
+    // Never rehydrated -- see rehydrateFromJobPreparation's own docstring
+    // ("Do not persist FinalValidationReport").
+    setFinalTailoredResume(rehydrated.finalTailoredResume)
+    setTailoringValidationReport(null)
+    setPostApplyAnalysis(rehydrated.postApplyAnalysis)
+    setPostApplyComparison(rehydrated.postApplyComparison)
+    setPostApplyAnalysisStatus('idle')
+    return rehydrated.nextRoute
+  }
+
   function clearSession() {
     setResume(null)
     setJobDescription(null)
@@ -330,6 +375,7 @@ export function ResumeSessionProvider({
     jobPreparationId,
     setJobPreparationId,
     resetForNewAnalysis,
+    rehydrateFromHistory,
     clearSession,
   }
 

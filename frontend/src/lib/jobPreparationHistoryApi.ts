@@ -7,14 +7,21 @@ import { ApiError } from './api'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 
-// Calls the backend's GET /v1/job-preparations -- the History list. No
-// filters are sent yet (see HistoryPage: no search/filter UI in this
-// milestone), but the backend already supports company/job_title/
-// updated_after/limit if a future UI adds them.
-export async function listJobPreparations(): Promise<JobPreparationSummary[]> {
+// Calls the backend's GET /v1/job-preparations -- the History list.
+// `limit` is the only filter sent (History shows only its 10 most
+// recent); search is client-side over the returned page (see
+// HistoryPage), not a server-side filter -- the backend already supports
+// company/job_title/updated_after too, unused here.
+export async function listJobPreparations(options?: {
+  limit?: number
+}): Promise<JobPreparationSummary[]> {
+  const params = new URLSearchParams()
+  if (options?.limit !== undefined) params.set('limit', String(options.limit))
+  const query = params.toString()
+
   let response: Response
   try {
-    response = await fetch(`${API_BASE_URL}/v1/job-preparations`)
+    response = await fetch(`${API_BASE_URL}/v1/job-preparations${query ? `?${query}` : ''}`)
   } catch {
     throw new ApiError('Could not reach the history service. Is the backend running?')
   }

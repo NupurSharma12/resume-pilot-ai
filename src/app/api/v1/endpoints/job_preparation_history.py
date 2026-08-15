@@ -126,7 +126,9 @@ async def get_job_preparation(
     if job_preparation is None:
         raise HTTPException(status_code=404, detail="Job preparation not found.")
 
-    resume_name = await _resume_name_for(store, job_preparation)
+    source_version = await store.get_resume_version(job_preparation.source_resume_version_id)
+    resume = await store.get_resume(source_version.resume_id)
+    resume_name = resume.name
     applied_resume_text: str | None = None
     if job_preparation.applied_resume_version_id is not None:
         applied_version = await store.get_resume_version(job_preparation.applied_resume_version_id)
@@ -139,6 +141,7 @@ async def get_job_preparation(
         company=job_preparation.company,
         job_description=job_preparation.job_description,
         resume_name=resume_name,
+        resume_text=source_version.content,
         status=job_preparation.status.value,
         created_at=job_preparation.created_at,
         updated_at=job_preparation.updated_at,

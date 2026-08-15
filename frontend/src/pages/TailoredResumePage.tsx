@@ -12,6 +12,7 @@ import TailoringDownloadPanel from '../components/TailoringDownloadPanel'
 import TailoringPreviewPanel from '../components/TailoringPreviewPanel'
 import PostApplyComparisonCard from '../components/PostApplyComparisonCard'
 import { getCareerConversation } from '../lib/careerConversationApi'
+import { getJobPreparation } from '../lib/jobPreparationHistoryApi'
 import {
   buildConflictSummaries,
   buildSectionFallbackOrdinals,
@@ -35,6 +36,7 @@ import type {
   ExportFormat,
   GenerateSuggestionsResponse,
 } from '../data/tailoringSuggestionsTypes'
+import type { ConversationSessionState } from '../data/careerConversationTypes'
 
 const RECOVERY_MESSAGE =
   'We need to regenerate your tailoring suggestions before applying changes.\n\n' +
@@ -52,6 +54,35 @@ const RECOVERY_MESSAGE =
 function parseRevalidationSuggestionId(message: string): string | null {
   const match = /suggestion '([^']+)'/.exec(message)
   return match ? match[1] : null
+}
+
+// The live Career Conversation transcript lives in `ConversationSessionStore`
+// (in-memory, process-lifetime only -- see that module's own docstring),
+// so a backend restart between completing the conversation and generating
+// a tailoring plan makes `sessionId` 404. That is recoverable without any
+// new backend endpoint: the exact same transcript was already durably
+// persisted onto `JobPreparation.career_conversation` the moment the
+// conversation completed (see `record_career_conversation` -- only ever
+// called once `status` reaches `complete`, so this fallback can only ever
+// apply to a genuinely complete conversation, never a half-finished one).
+// Falling back here, rather than surfacing the 404 as a hard error, is
+// what lets a rehydrated-from-History session (or any session that
+// outlives a backend restart) still generate/regenerate a tailoring plan.
+async function getCareerConversationOrPersisted(
+  sessionId: string,
+  jobPreparationId: string | null,
+): Promise<ConversationSessionState> {
+  try {
+    return await getCareerConversation(sessionId)
+  } catch (err) {
+    if (err instanceof ApiError && err.cause === 'not_found' && jobPreparationId) {
+      const jobPreparation = await getJobPreparation(jobPreparationId)
+      if (jobPreparation.career_conversation) {
+        return jobPreparation.career_conversation as unknown as ConversationSessionState
+      }
+    }
+    throw err
+  }
 }
 
 export default function TailoredResumePage() {
@@ -159,8 +190,13 @@ export default function TailoredResumePage() {
       // The full Career Conversation transcript isn't held anywhere in
       // shared state (only its session id is) -- re-fetched here via the
       // same pure-read GET this app already uses for reload-safety (see
-      // CareerConversationPage).
-      const session = await getCareerConversation(activeCareerConversationSessionId)
+      // CareerConversationPage), falling back to the durably persisted
+      // copy if the in-memory session itself is gone (see
+      // getCareerConversationOrPersisted's docstring).
+      const session = await getCareerConversationOrPersisted(
+        activeCareerConversationSessionId,
+        jobPreparationId,
+      )
       const plan = await generateTailoringSuggestions(
         resume.text,
         jobDescription.text,
@@ -357,7 +393,10 @@ export default function TailoredResumePage() {
 
     let newPlan: GenerateSuggestionsResponse
     try {
-      const session = await getCareerConversation(activeCareerConversationSessionId)
+      const session = await getCareerConversationOrPersisted(
+        activeCareerConversationSessionId,
+        jobPreparationId,
+      )
       newPlan = await generateTailoringSuggestions(
         resume.text,
         jobDescription.text,
@@ -804,7 +843,7 @@ export default function TailoredResumePage() {
                     on every new commit, so a second/third phased apply
                     re-locks Download until re-analyzed again, the same way
                     the first apply does. */}
-                {finalTailoredResume && tailoringValidationReport && (
+                {finalTailoredResume && (
                   <>
                     <TailoringFinalResumeCard
                       finalResumeText={finalTailoredResume.finalResumeText}

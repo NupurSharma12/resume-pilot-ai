@@ -64,6 +64,7 @@ function makeResumeSessionValue(
     jobPreparationId: 'job-prep-1',
     setJobPreparationId: vi.fn(),
     resetForNewAnalysis: vi.fn(),
+    rehydrateFromHistory: vi.fn(),
     clearSession: vi.fn(),
     ...overrides,
   }
@@ -95,6 +96,7 @@ const fixtureDetail: JobPreparationDetail = {
   company: 'Adobe',
   job_description: 'We are hiring a senior engineer.',
   resume_name: 'Senior Engineer Resume',
+  resume_text: 'SUMMARY\nSenior backend engineer.',
   status: 'active',
   created_at: '2026-08-01T09:00:00Z',
   updated_at: '2026-08-12T09:00:00Z',
