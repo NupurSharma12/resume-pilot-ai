@@ -634,6 +634,117 @@ export default function TailoredResumePage() {
     [tailoringAvailableExportFormats],
   )
 
+  // The single CTA for (re)generating a plan, colocated with the
+  // instructions it reads -- rendered both before a plan exists (first
+  // generation) and after (regeneration), always calling the same
+  // `generate()` above so there is exactly one code path for both cases.
+  const instructionsCard = (
+    <div className="rounded-2xl border border-gray-200 bg-white p-6">
+      <h3 className="font-semibold text-gray-900">Anything else you want to change?</h3>
+      <p className="mt-1 text-sm text-gray-500">
+        Instructions control style and priorities -- they can never add experience, skills, or
+        claims that aren't already supported by your resume or conversation. For example: "Keep
+        the resume under two pages," "Make the summary more engineering-focused," "Preserve all
+        Adobe experience," "Do not change employment dates."
+      </p>
+      <textarea
+        value={tailoringCustomInstructions}
+        onChange={(event) => setTailoringCustomInstructions(event.target.value)}
+        rows={3}
+        placeholder="Optional instructions for the next plan you generate…"
+        className="mt-3 w-full rounded-xl border border-gray-200 p-3 text-sm text-gray-800 focus:border-indigo-400 focus:outline-none"
+      />
+      <Button
+        variant="solid"
+        icon={tailoringPlan ? <RotateCw size={16} /> : <Wand2 size={16} />}
+        className="mt-3"
+        onClick={generate}
+      >
+        {tailoringPlan ? 'Regenerate Tailoring Plan' : 'Generate Tailoring Plan'}
+      </Button>
+    </div>
+  )
+
+  // Stage 4: Final Resume -> Re-analyze -> Compare -> Download. A strict,
+  // enforced order (see docs/features/postapply-analysis-loop.md's
+  // "Download is gated on re-analysis"): the updated resume is shown
+  // immediately, but Download itself does not render at all until a real
+  // comparison exists for *this* final resume -- there is no disabled/
+  // ghost download button, it simply isn't part of the page yet.
+  // `attemptApply` resets `postApplyComparison` to null on every new
+  // commit, so a second/third phased apply re-locks Download until
+  // re-analyzed again, the same way the first apply does. Shared between
+  // the normal review flow and the zero-suggestions "Continue with Current
+  // Resume" flow below -- both produce the exact same `finalTailoredResume`
+  // shape via the exact same `attemptApply`, so there is nothing
+  // flow-specific about what happens once it exists.
+  const finalResumeSection = finalTailoredResume && (
+    <>
+      <TailoringFinalResumeCard
+        finalResumeText={finalTailoredResume.finalResumeText}
+        appliedSuggestionIds={finalTailoredResume.appliedSuggestionIds}
+        allSuggestions={tailoringPlan?.suggestions ?? []}
+        validationReport={tailoringValidationReport}
+        sectionNames={sectionNames}
+        sectionFallbackOrdinals={sectionFallbackOrdinals}
+        onContinueEditing={scrollToSuggestions}
+      />
+
+      {/* Stage 5: Post-Apply Analysis Loop -- see
+          docs/features/postapply-analysis-loop.md. While a re-analysis is
+          in flight, this replaces itself with a section-level loading
+          state (the same pattern "Generating tailoring suggestions…" uses
+          above) -- real re-analysis calls can take well over a minute, so
+          a mere button-label swap is not "meaningful progress" for a wait
+          that long. */}
+      {postApplyAnalysisStatus === 'reanalyzing' ? (
+        <ConversationLoadingState message="Re-analyzing your updated resume against the job description…" />
+      ) : (
+        <div className="rounded-2xl border border-gray-200 bg-white p-6">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h3 className="font-semibold text-gray-900">How much did this help?</h3>
+              <p className="mt-1 text-sm text-gray-500">
+                Re-analyze your updated resume against the same job description to see whether the
+                applied changes actually improved your match --
+                {postApplyComparison
+                  ? ' your download stays available below.'
+                  : ' this unlocks your download.'}
+              </p>
+            </div>
+            <Button variant="outline" icon={<BarChart2 size={16} />} onClick={handleReanalyze}>
+              {postApplyComparison ? 'Re-analyze Again' : 'Re-analyze & Compare'}
+            </Button>
+          </div>
+          {postApplyAnalysisStatus === 'error' && reanalyzeError && (
+            <div className="mt-4 rounded-xl border border-amber-100 bg-amber-50/60 p-4">
+              <p className="text-sm text-amber-700">
+                Your resume changes were applied successfully, but re-analysis could not be
+                completed, so improvement could not be measured: {reanalyzeError}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {postApplyComparison && (
+        <>
+          <PostApplyComparisonCard comparison={postApplyComparison} />
+          {availableFormats.length > 0 && (
+            <TailoringDownloadPanel
+              availableFormats={availableFormats}
+              defaultFormat={defaultExportFormatForSourceFormat(tailoringSourceFormat)}
+              sourceFormat={tailoringSourceFormat}
+              exportingFormat={exportingFormat}
+              exportError={exportError || null}
+              onDownload={handleDownload}
+            />
+          )}
+        </>
+      )}
+    </>
+  )
+
   return (
     <>
       <TopHeader
@@ -671,14 +782,14 @@ export default function TailoredResumePage() {
             ) : tailoringPlanStatus === 'error' && !tailoringPlan ? (
               <TailoringErrorState message={generateError} onRetry={generate} />
             ) : !tailoringPlan ? (
-              <div className="flex flex-col items-center gap-4 rounded-2xl border border-dashed border-gray-300 bg-white px-8 py-16 text-center">
-                <p className="max-w-md text-sm text-gray-500">
-                  Nothing about your resume changes yet. We'll suggest small, evidence-backed edits
-                  for you to review -- you decide which ones to apply.
-                </p>
-                <Button variant="solid" icon={<Wand2 size={16} />} onClick={generate}>
-                  Generate Tailoring Plan
-                </Button>
+              <div className="space-y-6">
+                <div className="flex flex-col items-center gap-4 rounded-2xl border border-dashed border-gray-300 bg-white px-8 py-16 text-center">
+                  <p className="max-w-md text-sm text-gray-500">
+                    Nothing about your resume changes yet. We'll suggest small, evidence-backed
+                    edits for you to review -- you decide which ones to apply.
+                  </p>
+                </div>
+                {instructionsCard}
               </div>
             ) : isPreviewOpen && previewResult ? (
               // Stage: Preview Changes -- a focused, read-only look at what
@@ -698,6 +809,71 @@ export default function TailoredResumePage() {
                 onBack={closePreview}
                 onApplyNow={() => runApplyFlow('commit')}
               />
+            ) : tailoringPlan.suggestions.length === 0 ? (
+              // A plan with zero suggestions is a valid, successful outcome
+              // (e.g. the resume already aligns well with the job
+              // description) -- not an error, and not the same state as "no
+              // plan yet" above. There is nothing to review/select, so the
+              // primary action is to move forward with the resume as-is:
+              // "Continue with Current Resume" runs the exact same commit
+              // path (`runApplyFlow('commit')` -> `attemptApply`) that
+              // "Apply Now" uses elsewhere, just with zero selections --
+              // apply is a pure recomputation from the plan's original
+              // structured resume, so this legitimately produces the
+              // original resume, unchanged, as `finalTailoredResume`. From
+              // there the existing Re-analyze/Compare/Download flow
+              // (`finalResumeSection`) takes over exactly as it would after
+              // any other apply -- no new workflow. "Regenerate Tailoring
+              // Plan" (in `instructionsCard`) stays available throughout as
+              // the secondary option.
+              <div className="space-y-6">
+                {!finalTailoredResume ? (
+                  <div className="flex flex-col items-center gap-4 rounded-2xl border border-dashed border-gray-300 bg-white px-8 py-16 text-center">
+                    <p className="max-w-md text-sm text-gray-500">
+                      No changes recommended -- your resume already aligns well with this job
+                      description.
+                    </p>
+                    <Button
+                      variant="solid"
+                      icon={<Wand2 size={16} />}
+                      disabled={isApplying || isRecovering}
+                      onClick={() => runApplyFlow('commit')}
+                    >
+                      {isRecovering
+                        ? 'Applying…'
+                        : isApplying
+                          ? 'Continuing…'
+                          : 'Continue with Current Resume'}
+                    </Button>
+                    {isRecovering && (
+                      <p aria-live="polite" className="text-sm text-gray-500">
+                        Refreshing tailoring suggestions…
+                      </p>
+                    )}
+                    {!isRecovering && recoveryError && (
+                      <div className="w-full rounded-xl border border-amber-100 bg-amber-50/60 p-4 text-left">
+                        <p className="whitespace-pre-line text-sm text-amber-700">{recoveryError}</p>
+                        <Button
+                          variant="outline"
+                          icon={<RotateCw size={14} />}
+                          className="mt-3"
+                          onClick={recoverFromStalePlan}
+                        >
+                          Regenerate Suggestions
+                        </Button>
+                      </div>
+                    )}
+                    {!isRecovering && !recoveryError && applyError && (
+                      <div className="w-full rounded-xl border border-rose-100 bg-rose-50/60 p-4 text-left">
+                        <p className="text-sm text-rose-600">{applyError}</p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  finalResumeSection
+                )}
+                {instructionsCard}
+              </div>
             ) : (
               <>
                 <TailoringPlanSummaryHeader
@@ -721,19 +897,11 @@ export default function TailoredResumePage() {
                     <Button variant="outline" icon={<Square size={14} />} onClick={clearAll}>
                       Clear All
                     </Button>
-                    <Button variant="outline" icon={<RotateCw size={14} />} onClick={generate}>
-                      Regenerate
-                    </Button>
                   </div>
                 </div>
 
-                {tailoringPlan.suggestions.length === 0 ? (
-                  <p className="rounded-2xl border border-dashed border-gray-300 bg-white px-6 py-10 text-center text-sm text-gray-500">
-                    No suggestions were proposed for this resume and job description.
-                  </p>
-                ) : (
-                  <div ref={suggestionsListRef} className="space-y-6">
-                    {suggestionGroups.map((group) => (
+                <div ref={suggestionsListRef} className="space-y-6">
+                  {suggestionGroups.map((group) => (
                       <div key={group.sectionId}>
                         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
                           {group.sectionName}
@@ -766,30 +934,10 @@ export default function TailoredResumePage() {
                         </ul>
                       </div>
                     ))}
-                  </div>
-                )}
+                </div>
 
                 {/* Stage 3: Custom Instructions */}
-                <div className="rounded-2xl border border-gray-200 bg-white p-6">
-                  <h3 className="font-semibold text-gray-900">Anything else you want to change?</h3>
-                  <p className="mt-1 text-sm text-gray-500">
-                    Instructions control style and priorities -- they can never add experience,
-                    skills, or claims that aren't already supported by your resume or conversation.
-                    For example: "Keep the resume under two pages," "Make the summary more
-                    engineering-focused," "Preserve all Adobe experience," "Do not change
-                    employment dates."
-                  </p>
-                  <textarea
-                    value={tailoringCustomInstructions}
-                    onChange={(event) => setTailoringCustomInstructions(event.target.value)}
-                    rows={3}
-                    placeholder="Optional instructions for the next plan you generate…"
-                    className="mt-3 w-full rounded-xl border border-gray-200 p-3 text-sm text-gray-800 focus:border-indigo-400 focus:outline-none"
-                  />
-                  <p className="mt-2 text-xs text-gray-400">
-                    Applies the next time you generate or regenerate a plan.
-                  </p>
-                </div>
+                {instructionsCard}
 
                 {/* Stage 2: Preview Changes -- the only way into applying;
                     there is no direct "apply" action from this stage
@@ -841,88 +989,7 @@ export default function TailoredResumePage() {
                   )}
                 </div>
 
-                {/* Stage 4: Final Resume -> Re-analyze -> Compare -> Download.
-                    A strict, enforced order (see docs/features/postapply-
-                    analysis-loop.md's "Download is gated on re-analysis"):
-                    the updated resume is shown immediately, but Download
-                    itself does not render at all until a real comparison
-                    exists for *this* final resume -- there is no disabled/
-                    ghost download button, it simply isn't part of the page
-                    yet. `attemptApply` resets `postApplyComparison` to null
-                    on every new commit, so a second/third phased apply
-                    re-locks Download until re-analyzed again, the same way
-                    the first apply does. */}
-                {finalTailoredResume && (
-                  <>
-                    <TailoringFinalResumeCard
-                      finalResumeText={finalTailoredResume.finalResumeText}
-                      appliedSuggestionIds={finalTailoredResume.appliedSuggestionIds}
-                      allSuggestions={tailoringPlan.suggestions}
-                      validationReport={tailoringValidationReport}
-                      sectionNames={sectionNames}
-                      sectionFallbackOrdinals={sectionFallbackOrdinals}
-                      onContinueEditing={scrollToSuggestions}
-                    />
-
-                    {/* Stage 5: Post-Apply Analysis Loop -- see
-                        docs/features/postapply-analysis-loop.md. While a
-                        re-analysis is in flight, this replaces itself with
-                        a section-level loading state (the same pattern
-                        "Generating tailoring suggestions…" uses above) --
-                        real re-analysis calls can take well over a minute,
-                        so a mere button-label swap is not "meaningful
-                        progress" for a wait that long. */}
-                    {postApplyAnalysisStatus === 'reanalyzing' ? (
-                      <ConversationLoadingState message="Re-analyzing your updated resume against the job description…" />
-                    ) : (
-                      <div className="rounded-2xl border border-gray-200 bg-white p-6">
-                        <div className="flex flex-wrap items-center justify-between gap-4">
-                          <div>
-                            <h3 className="font-semibold text-gray-900">How much did this help?</h3>
-                            <p className="mt-1 text-sm text-gray-500">
-                              Re-analyze your updated resume against the same job description to see
-                              whether the applied changes actually improved your match --
-                              {postApplyComparison
-                                ? ' your download stays available below.'
-                                : ' this unlocks your download.'}
-                            </p>
-                          </div>
-                          <Button
-                            variant="outline"
-                            icon={<BarChart2 size={16} />}
-                            onClick={handleReanalyze}
-                          >
-                            {postApplyComparison ? 'Re-analyze Again' : 'Re-analyze & Compare'}
-                          </Button>
-                        </div>
-                        {postApplyAnalysisStatus === 'error' && reanalyzeError && (
-                          <div className="mt-4 rounded-xl border border-amber-100 bg-amber-50/60 p-4">
-                            <p className="text-sm text-amber-700">
-                              Your resume changes were applied successfully, but re-analysis could
-                              not be completed, so improvement could not be measured: {reanalyzeError}
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {postApplyComparison && (
-                      <>
-                        <PostApplyComparisonCard comparison={postApplyComparison} />
-                        {availableFormats.length > 0 && (
-                          <TailoringDownloadPanel
-                            availableFormats={availableFormats}
-                            defaultFormat={defaultExportFormatForSourceFormat(tailoringSourceFormat)}
-                            sourceFormat={tailoringSourceFormat}
-                            exportingFormat={exportingFormat}
-                            exportError={exportError || null}
-                            onDownload={handleDownload}
-                          />
-                        )}
-                      </>
-                    )}
-                  </>
-                )}
+                {finalResumeSection}
               </>
             )}
           </div>
