@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { nextRouteForCheckpoints, rehydrateFromJobPreparation } from './rehydrateFromJobPreparation'
+import { ALL_EXPORT_FORMATS } from '../lib/sourceFormat'
 import type { CheckpointStatus, JobPreparationDetail } from '../data/jobPreparationHistoryTypes'
 
 const fixtureCheckpoints: CheckpointStatus = {
@@ -8,6 +9,27 @@ const fixtureCheckpoints: CheckpointStatus = {
   tailoring_plan_completed_at: null,
   applied_at: null,
   post_apply_analysis_completed_at: null,
+}
+
+// A full, valid `ResumeAnalysisResult` shape -- everything
+// `isValidResumeAnalysisResult` requires and everything `insights.ts`'s
+// consumers actually read. Deliberately not the old, deliberately-minimal
+// `{ overall_assessment: { overall_score, summary } }` fixture this file
+// used to have: that shape is exactly what a real persisted row can no
+// longer have and still rehydrate (see the malformed-data tests below),
+// so a fixture standing in for "a real, valid preparation" needs to
+// actually be one.
+const fixtureAnalysisResult = {
+  overall_assessment: {
+    overall_score: 72,
+    hiring_recommendation: { decision: 'Proceed', reason: 'Solid fit.' },
+    summary: 'Solid backend fit.',
+  },
+  skill_matches: [],
+  matching_projects: [],
+  strengths: ['Strong backend ownership.'],
+  weaknesses: ['Frontend experience is unclear.'],
+  resume_improvements: [],
 }
 
 const fixtureDetail: JobPreparationDetail = {
@@ -21,9 +43,7 @@ const fixtureDetail: JobPreparationDetail = {
   created_at: '2026-08-01T09:00:00Z',
   updated_at: '2026-08-12T09:00:00Z',
   checkpoints: fixtureCheckpoints,
-  analysis_result: {
-    overall_assessment: { overall_score: 72, summary: 'Solid backend fit.' },
-  },
+  analysis_result: fixtureAnalysisResult,
   career_conversation: null,
   tailoring_plan: null,
   applied_resume_text: null,
@@ -81,11 +101,18 @@ describe('nextRouteForCheckpoints', () => {
 
 describe('rehydrateFromJobPreparation', () => {
   it('maps resume/job description/analysis/jobPreparationId from an analysis-only preparation', () => {
-    const result = rehydrateFromJobPreparation(fixtureDetail)
+    const outcome = rehydrateFromJobPreparation(fixtureDetail)
 
-    expect(result.resume).toEqual({ text: 'SUMMARY\nSenior backend engineer.', fileName: 'Senior Engineer Resume' })
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    const result = outcome.session
+
+    expect(result.resume).toEqual({
+      text: 'SUMMARY\nSenior backend engineer.',
+      fileName: 'Senior Engineer Resume',
+    })
     expect(result.jobDescription).toEqual({ text: 'We are hiring a senior engineer.', fileName: null })
-    expect(result.resumeAnalysis).toEqual(fixtureDetail.analysis_result)
+    expect(result.resumeAnalysis).toEqual(fixtureAnalysisResult)
     expect(result.jobPreparationId).toBe('job-prep-1')
     expect(result.activeCareerConversationSessionId).toBeNull()
     expect(result.careerConversationStatus).toBeNull()
@@ -105,14 +132,21 @@ describe('rehydrateFromJobPreparation', () => {
       career_conversation: { session_id: 'conv-session-1', status: 'complete', history: [] },
     }
 
-    const result = rehydrateFromJobPreparation(detail)
+    const outcome = rehydrateFromJobPreparation(detail)
 
-    expect(result.activeCareerConversationSessionId).toBe('conv-session-1')
-    expect(result.careerConversationStatus).toBe('complete')
-    expect(result.nextRoute).toBe('/tailored-resume')
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    expect(outcome.session.activeCareerConversationSessionId).toBe('conv-session-1')
+    expect(outcome.session.careerConversationStatus).toBe('complete')
+    expect(outcome.session.nextRoute).toBe('/tailored-resume')
   })
 
-  it('rehydrates a generated tailoring plan and its selection', () => {
+  it('rehydrates a generated tailoring plan and its selection from the real persisted shape (plan_id + suggestions only)', () => {
+    // Exactly what `record_generated_tailoring_plan` actually persists --
+    // no `available_export_formats`/`default_export_format`, for *any*
+    // preparation, not just old ones (see PersistedTailoringPlan's own
+    // docstring). A test fixture that included those two fields here
+    // would misrepresent what real persisted data looks like.
     const detail: JobPreparationDetail = {
       ...fixtureDetail,
       checkpoints: {
@@ -125,20 +159,25 @@ describe('rehydrateFromJobPreparation', () => {
         generated_plan: {
           plan_id: 'plan-1',
           suggestions: [{ suggestion_id: 's-1' }],
-          available_export_formats: ['txt', 'markdown'],
-          default_export_format: 'txt',
         },
         selection: { selected_suggestion_ids: ['s-1'], edited_texts: { 's-1': 'Edited text.' } },
       },
     }
 
-    const result = rehydrateFromJobPreparation(detail)
+    const outcome = rehydrateFromJobPreparation(detail)
 
-    expect(result.tailoringPlan).toEqual(detail.tailoring_plan?.generated_plan)
-    expect(result.tailoringSelections).toEqual(['s-1'])
-    expect(result.tailoringEditedTexts).toEqual({ 's-1': 'Edited text.' })
-    expect(result.tailoringAvailableExportFormats).toEqual(['txt', 'markdown'])
-    expect(result.finalTailoredResume).toBeNull()
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    expect(outcome.session.tailoringPlan).toEqual({
+      plan_id: 'plan-1',
+      suggestions: [{ suggestion_id: 's-1' }],
+    })
+    expect(outcome.session.tailoringSelections).toEqual(['s-1'])
+    expect(outcome.session.tailoringEditedTexts).toEqual({ 's-1': 'Edited text.' })
+    // Derived from the constant, never from the (nonexistent) persisted
+    // field -- this is what makes Download work after rehydration.
+    expect(outcome.session.tailoringAvailableExportFormats).toEqual(ALL_EXPORT_FORMATS)
+    expect(outcome.session.finalTailoredResume).toBeNull()
   })
 
   it('rehydrates the applied final resume without a selection when applied_resume_text exists', () => {
@@ -152,23 +191,23 @@ describe('rehydrateFromJobPreparation', () => {
       },
       career_conversation: { session_id: 'conv-session-1', status: 'complete', history: [] },
       tailoring_plan: {
-        generated_plan: {
-          plan_id: 'plan-1',
-          suggestions: [],
-          available_export_formats: ['txt'],
-          default_export_format: 'txt',
-        },
+        generated_plan: { plan_id: 'plan-1', suggestions: [] },
         selection: { selected_suggestion_ids: ['s-1'], edited_texts: {} },
       },
       applied_resume_text: 'SUMMARY\nTailored resume text.',
     }
 
-    const result = rehydrateFromJobPreparation(detail)
+    const outcome = rehydrateFromJobPreparation(detail)
 
-    expect(result.finalTailoredResume).toEqual({
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    expect(outcome.session.finalTailoredResume).toEqual({
       finalResumeText: 'SUMMARY\nTailored resume text.',
       appliedSuggestionIds: ['s-1'],
     })
+    // Download depends on this, not on any field read off the plan --
+    // see TailoringPlanContent's docstring.
+    expect(outcome.session.tailoringAvailableExportFormats).toEqual(ALL_EXPORT_FORMATS)
   })
 
   it('rehydrates post-apply analysis/comparison when re-analysis has completed', () => {
@@ -188,9 +227,63 @@ describe('rehydrateFromJobPreparation', () => {
       },
     }
 
-    const result = rehydrateFromJobPreparation(detail)
+    const outcome = rehydrateFromJobPreparation(detail)
 
-    expect(result.postApplyAnalysis).toEqual(detail.post_apply_analysis?.analysis)
-    expect(result.postApplyComparison).toEqual(detail.post_apply_analysis?.comparison)
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    expect(outcome.session.postApplyAnalysis).toEqual(detail.post_apply_analysis?.analysis)
+    expect(outcome.session.postApplyComparison).toEqual(detail.post_apply_analysis?.comparison)
+  })
+
+  it('no plan yet -- available export formats stay empty, nothing to download', () => {
+    const outcome = rehydrateFromJobPreparation(fixtureDetail)
+
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    expect(outcome.session.tailoringAvailableExportFormats).toEqual([])
+  })
+
+  describe('malformed analysis_result -- graceful rehydration failure', () => {
+    it('fails when analysis_result is null', () => {
+      const outcome = rehydrateFromJobPreparation({ ...fixtureDetail, analysis_result: null })
+
+      expect(outcome.ok).toBe(false)
+      if (outcome.ok) return
+      expect(outcome.error).toMatch(/can't be restored/i)
+    })
+
+    it('fails when analysis_result is missing weaknesses (e.g. a legacy/test-fixture shape)', () => {
+      const { weaknesses: _weaknesses, ...withoutWeaknesses } = fixtureAnalysisResult
+      const outcome = rehydrateFromJobPreparation({
+        ...fixtureDetail,
+        analysis_result: withoutWeaknesses,
+      })
+
+      expect(outcome.ok).toBe(false)
+    })
+
+    it('fails when overall_assessment.hiring_recommendation is missing', () => {
+      const outcome = rehydrateFromJobPreparation({
+        ...fixtureDetail,
+        analysis_result: {
+          ...fixtureAnalysisResult,
+          overall_assessment: { overall_score: 72, summary: 'Solid backend fit.' },
+        },
+      })
+
+      expect(outcome.ok).toBe(false)
+    })
+
+    it('fails when overall_score is not a number', () => {
+      const outcome = rehydrateFromJobPreparation({
+        ...fixtureDetail,
+        analysis_result: {
+          ...fixtureAnalysisResult,
+          overall_assessment: { ...fixtureAnalysisResult.overall_assessment, overall_score: '72' },
+        },
+      })
+
+      expect(outcome.ok).toBe(false)
+    })
   })
 })

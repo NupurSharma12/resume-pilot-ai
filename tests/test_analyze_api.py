@@ -66,7 +66,9 @@ async def api_client_factory():
     clients: list[AsyncClient] = []
 
     async def _factory() -> tuple[AsyncClient, InMemoryPersistenceStore]:
-        settings = Settings(log_json=False, gemini_api_key="test-gemini-api-key")
+        settings = Settings(
+            log_json=False, gemini_api_key="test-gemini-api-key", persistence_backend="memory"
+        )
         app = create_app(settings)
         app.dependency_overrides[get_resume_analysis_workflow] = lambda: ResumeAnalysisWorkflow(
             prompt_builder=ResumeAnalysisPromptBuilder(),
@@ -151,3 +153,40 @@ async def test_repeated_analyze_of_the_same_resume_still_creates_a_second_resume
     assert (
         first_response.json()["job_preparation_id"] != second_response.json()["job_preparation_id"]
     )
+
+
+async def test_analyze_without_the_e2e_test_header_includes_the_preparation_in_history(
+    api_client_factory,
+) -> None:
+    """The safe default: a request with no `X-E2E-Test` header behaves exactly as before."""
+    client, store = await api_client_factory()
+
+    response = await client.post(
+        "/v1/analyze", json={"resume": "Backend engineer resume.", "job_description": "JD text."}
+    )
+
+    job_preparation = await store.get_job_preparation(UUID(response.json()["job_preparation_id"]))
+    assert job_preparation.include_in_history is True
+
+
+async def test_analyze_with_the_e2e_test_header_excludes_the_preparation_from_history(
+    api_client_factory,
+) -> None:
+    """`X-E2E-Test: true` is the only way to opt a preparation out of History.
+
+    The preparation is still fully created and persisted, usable by id
+    like any other -- only `include_in_history` differs.
+    """
+    client, store = await api_client_factory()
+
+    response = await client.post(
+        "/v1/analyze",
+        json={"resume": "Backend engineer resume.", "job_description": "JD text."},
+        headers={"X-E2E-Test": "true"},
+    )
+
+    job_preparation_id = UUID(response.json()["job_preparation_id"])
+    job_preparation = await store.get_job_preparation(job_preparation_id)
+    assert job_preparation.include_in_history is False
+    assert await store.list_job_preparations() == []
+    assert job_preparation.analysis_result is not None

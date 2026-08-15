@@ -6,7 +6,9 @@ import Button from '../components/Button'
 import InterviewPreparationCard from '../components/InterviewPreparationCard'
 import CheckpointList from '../components/CheckpointList'
 import ContinuePreparationDialog from '../components/ContinuePreparationDialog'
+import DeleteConfirmationDialog from '../components/DeleteConfirmationDialog'
 import {
+  deleteJobPreparation,
   generateInterviewPreparation,
   getJobPreparation,
   listJobPreparations,
@@ -142,6 +144,7 @@ type ListStatus = 'loading' | 'success' | 'error'
 type DetailStatus = 'loading' | 'success' | 'error'
 type GenerationStatus = 'idle' | 'generating' | 'error'
 type ContinueStatus = 'idle' | 'loading' | 'error'
+type DeleteStatus = 'idle' | 'loading' | 'error'
 
 export default function HistoryPage() {
   const navigate = useNavigate()
@@ -169,6 +172,12 @@ export default function HistoryPage() {
   const [continueTarget, setContinueTarget] = useState<JobPreparationSummary | null>(null)
   const [continueStatus, setContinueStatus] = useState<ContinueStatus>('idle')
   const [continueError, setContinueError] = useState('')
+
+  // Same "hold the already-fetched Summary, not a fresh fetch" shape as
+  // continueTarget above.
+  const [deleteTarget, setDeleteTarget] = useState<JobPreparationSummary | null>(null)
+  const [deleteStatus, setDeleteStatus] = useState<DeleteStatus>('idle')
+  const [deleteError, setDeleteError] = useState('')
 
   async function loadList() {
     setListStatus('loading')
@@ -208,14 +217,53 @@ export default function HistoryPage() {
     setContinueError('')
     getJobPreparation(target.id)
       .then((jobPreparationDetail) => {
-        const nextRoute = rehydrateFromHistory(jobPreparationDetail)
+        const outcome = rehydrateFromHistory(jobPreparationDetail)
+        if (!outcome.ok) {
+          // Fails gracefully: the dialog stays open with the reason
+          // instead of navigating into a session that would crash
+          // elsewhere -- see rehydrateFromJobPreparation's own docstring.
+          setContinueError(outcome.error)
+          setContinueStatus('error')
+          return
+        }
         setContinueStatus('idle')
         setContinueTarget(null)
-        navigate(nextRoute)
+        navigate(outcome.nextRoute)
       })
       .catch((err: unknown) => {
         setContinueError(err instanceof ApiError ? err.message : 'An unexpected error occurred.')
         setContinueStatus('error')
+      })
+  }
+
+  function handleConfirmDelete() {
+    if (!deleteTarget) return
+    const target = deleteTarget
+    setDeleteStatus('loading')
+    setDeleteError('')
+    deleteJobPreparation(target.id)
+      .then(() => {
+        // No full reload -- just drop it from the already-loaded list,
+        // the same "update in place" approach `handleGenerateInterviewPreparation`
+        // below already uses for its own successful mutation.
+        setItems((current) => current.filter((item) => item.id !== target.id))
+        setDeleteStatus('idle')
+        setDeleteTarget(null)
+      })
+      .catch((err: unknown) => {
+        // A 404 means the desired end state ("not in History") already
+        // holds -- e.g. deleted from another tab in the meantime. Treat
+        // it the same as a successful delete rather than showing a
+        // confusing error for something the user was already trying to
+        // achieve.
+        if (err instanceof ApiError && err.cause === 'not_found') {
+          setItems((current) => current.filter((item) => item.id !== target.id))
+          setDeleteStatus('idle')
+          setDeleteTarget(null)
+          return
+        }
+        setDeleteError(err instanceof ApiError ? err.message : 'An unexpected error occurred.')
+        setDeleteStatus('error')
       })
   }
 
@@ -437,6 +485,16 @@ export default function HistoryPage() {
                       Continue Preparation
                     </Button>
                   )}
+                  <Button
+                    variant="danger"
+                    onClick={() => {
+                      setDeleteError('')
+                      setDeleteStatus('idle')
+                      setDeleteTarget(item)
+                    }}
+                  >
+                    Delete
+                  </Button>
                 </div>
               </div>
             )
@@ -452,6 +510,17 @@ export default function HistoryPage() {
           error={continueError}
           onCancel={() => setContinueTarget(null)}
           onConfirm={handleConfirmContinue}
+        />
+      )}
+
+      {deleteTarget && (
+        <DeleteConfirmationDialog
+          jobTitle={deleteTarget.job_title}
+          company={deleteTarget.company}
+          isLoading={deleteStatus === 'loading'}
+          error={deleteError}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={handleConfirmDelete}
         />
       )}
     </>

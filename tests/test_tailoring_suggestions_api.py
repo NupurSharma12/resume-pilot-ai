@@ -99,7 +99,9 @@ async def api_client_factory():
     clients: list[AsyncClient] = []
 
     async def _factory(responses: list, reanalyze_responses: list | None = None) -> AsyncClient:
-        settings = Settings(log_json=False, gemini_api_key="test-gemini-api-key")
+        settings = Settings(
+            log_json=False, gemini_api_key="test-gemini-api-key", persistence_backend="memory"
+        )
         app = create_app(settings)
         gateway = FakeGateway(responses)
         app.dependency_overrides[get_tailoring_suggestion_workflow] = lambda: (

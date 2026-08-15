@@ -73,7 +73,9 @@ async def api_client_factory():
     async def _factory(
         generated: GeneratedInterviewPreparation | GeneratedTechnicalPreparation | BaseException,
     ) -> tuple[AsyncClient, object, FakeGateway]:
-        settings = Settings(log_json=False, gemini_api_key="test-gemini-api-key")
+        settings = Settings(
+            log_json=False, gemini_api_key="test-gemini-api-key", persistence_backend="memory"
+        )
         app = create_app(settings)
         gateway = FakeGateway(generated)
         app.dependency_overrides[get_interview_preparation_workflow] = lambda: (

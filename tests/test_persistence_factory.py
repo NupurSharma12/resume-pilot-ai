@@ -8,8 +8,19 @@ from app.persistence.memory_store import InMemoryPersistenceStore
 from app.persistence.postgres_store import PostgresPersistenceStore
 
 
-def test_default_settings_select_memory_backend() -> None:
-    assert Settings().persistence_backend == "memory"
+def test_default_settings_select_memory_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The field's true default is `memory` -- independent of any developer's local `.env`.
+
+    Same reasoning as `test_persistence_db_engine.py`'s identically
+    isolated `test_default_settings_leave_database_url_unset`: `Settings`
+    always reads `.env`, so a bare `Settings()` here would otherwise
+    reflect whatever `RESUMEPILOT_PERSISTENCE_BACKEND` a developer's own
+    `.env` happens to set for local Postgres testing, not this field's
+    actual default.
+    """
+    monkeypatch.delenv("RESUMEPILOT_PERSISTENCE_BACKEND", raising=False)
+
+    assert Settings(_env_file=None).persistence_backend == "memory"
 
 
 def test_memory_backend_builds_in_memory_store() -> None:

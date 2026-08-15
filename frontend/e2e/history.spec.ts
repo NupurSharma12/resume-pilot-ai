@@ -254,3 +254,81 @@ test.describe('History screen', () => {
     await expect(page.getByText(/analysis history is coming soon/i)).toBeVisible()
   })
 })
+
+test.describe('History screen: Delete', () => {
+  test('opens a confirmation, Cancel keeps it, Confirm removes it without a reload, and a re-delete is handled cleanly', async ({
+    page,
+  }) => {
+    let listCallCount = 0
+    await page.route('**/v1/job-preparations*', async (route) => {
+      listCallCount += 1
+      await route.fulfill({ json: { items: [partialSummary] } })
+    })
+    let deleteCallCount = 0
+    await page.route(`**/v1/job-preparations/${JOB_PREPARATION_ID}`, async (route) => {
+      if (route.request().method() === 'DELETE') {
+        deleteCallCount += 1
+        // First delete succeeds; a second one (this test's final step,
+        // simulating "already deleted") returns 404 -- see
+        // deleteJobPreparation's own `not_found` handling.
+        await route.fulfill({ status: deleteCallCount === 1 ? 204 : 404 })
+        return
+      }
+      await route.fulfill({ json: partialDetail })
+    })
+
+    await page.goto('/')
+    await page.getByRole('link', { name: 'History' }).click()
+    await expect(page).toHaveURL(/\/history$/)
+
+    const main = page.locator('main')
+    const heading = main.getByRole('heading', { name: 'Senior Full-Stack Engineer' })
+    await expect(heading).toBeVisible()
+
+    // Cancel keeps it.
+    await main.getByRole('button', { name: 'Delete' }).click()
+    await expect(page.getByText('Delete this preparation?')).toBeVisible()
+    await expect(page.getByText('This will remove it from your History.')).toBeVisible()
+    await page.getByRole('button', { name: 'Cancel' }).click()
+    await expect(page.getByText('Delete this preparation?')).not.toBeVisible()
+    await expect(heading).toBeVisible()
+    expect(deleteCallCount).toBe(0)
+
+    // Confirm removes it -- no *additional* GET /v1/job-preparations
+    // beyond whatever mount itself already triggered (dev-mode React
+    // StrictMode double-invokes effects once on mount -- unrelated to
+    // Delete, so this asserts no *extra* fetch, not an exact count).
+    const listCallCountBeforeDelete = listCallCount
+    await main.getByRole('button', { name: 'Delete' }).click()
+    await page.getByRole('dialog').getByRole('button', { name: 'Delete' }).click()
+    await expect(page.getByText('Delete this preparation?')).not.toBeVisible()
+    await expect(heading).not.toBeVisible()
+    expect(listCallCount).toBe(listCallCountBeforeDelete)
+    expect(deleteCallCount).toBe(1)
+  })
+
+  test('shows an inline error and keeps the item when delete fails', async ({ page }) => {
+    await page.route('**/v1/job-preparations*', async (route) => {
+      await route.fulfill({ json: { items: [partialSummary] } })
+    })
+    await page.route(`**/v1/job-preparations/${JOB_PREPARATION_ID}`, async (route) => {
+      if (route.request().method() === 'DELETE') {
+        await route.fulfill({ status: 500 })
+        return
+      }
+      await route.fulfill({ json: partialDetail })
+    })
+
+    await page.goto('/history')
+    const main = page.locator('main')
+    const heading = main.getByRole('heading', { name: 'Senior Full-Stack Engineer' })
+    await expect(heading).toBeVisible()
+
+    await main.getByRole('button', { name: 'Delete' }).click()
+    await page.getByRole('dialog').getByRole('button', { name: 'Delete' }).click()
+
+    await expect(page.getByText(/deleting this job preparation failed/i)).toBeVisible()
+    await expect(page.getByText('Delete this preparation?')).toBeVisible()
+    await expect(heading).toBeVisible()
+  })
+})

@@ -4,8 +4,8 @@ import type { JobDescriptionInputValue } from '../components/JobDescriptionInput
 import type {
   ExportFormat,
   FinalValidationReport,
-  GenerateSuggestionsResponse,
   SourceFormat,
+  TailoringPlanContent,
 } from '../data/tailoringSuggestionsTypes'
 import type { ResumeAnalysisComparison } from '../data/postApplyTypes'
 
@@ -79,7 +79,10 @@ export interface PersistedResumeSession {
   activeCareerConversationSessionId: string | null
   careerConversationStatus: CareerConversationStatus | null
   // Interactive Tailoring state (see docs/features/interactive-tailored-resume.md).
-  tailoringPlan: GenerateSuggestionsResponse | null
+  // Typed as `TailoringPlanContent`, not the full `GenerateSuggestionsResponse`
+  // -- `available_export_formats`/`default_export_format` are never part
+  // of what's actually stored here (see that type's own docstring).
+  tailoringPlan: TailoringPlanContent | null
   tailoringPlanStatus: PersistedTailoringPlanStatus
   tailoringSelections: string[]
   tailoringCustomInstructions: string

@@ -19,7 +19,16 @@ const MAX_CONVERSATION_TURNS = 8
 // Uploads the resume file and pastes the job description, leaving the
 // "Analyze Resume" CTA enabled -- does not click it, so callers can
 // assert on the enabled state first if they want to.
+//
+// Sets `X-E2E-Test: true` on every request this page makes, from
+// navigation onward -- the backend's `POST /v1/analyze` reads it to set
+// `include_in_history=False` on the JobPreparation this flow creates
+// (see the History Test Isolation & Delete design review), so golden-
+// path/downloads' real, LLM-backed preparations never pollute a real
+// user's History. No UI/production code is touched: this is a pure
+// network-layer header injected by Playwright, invisible to the app.
 export async function uploadResumeAndJobDescription(page: Page): Promise<void> {
+  await page.setExtraHTTPHeaders({ 'X-E2E-Test': 'true' })
   await page.goto('/')
   await page.locator('input[type="file"]').first().setInputFiles(SAMPLE_RESUME_PATH)
   // Client-side text extraction (pdfjs-dist/mammoth) runs even for a

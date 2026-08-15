@@ -132,6 +132,8 @@ def _job_preparation_from_row(row: JobPreparationRow) -> JobPreparation:
         status=JobPreparationStatus(row.status),
         created_at=row.created_at,
         updated_at=row.updated_at,
+        include_in_history=row.include_in_history,
+        deleted_at=row.deleted_at,
     )
 
 
@@ -251,6 +253,7 @@ class PostgresPersistenceStore:
         job_title: str,
         job_description: str,
         company: str | None = None,
+        include_in_history: bool = True,
     ) -> JobPreparation:
         async with self._session_factory() as session, session.begin():
             version = await session.get(ResumeVersionRow, source_resume_version_id)
@@ -277,6 +280,8 @@ class PostgresPersistenceStore:
                 applied_at=None,
                 post_apply_analysis_completed_at=None,
                 status=JobPreparationStatus.DRAFT.value,
+                include_in_history=include_in_history,
+                deleted_at=None,
             )
             session.add(row)
             await session.flush()
@@ -473,7 +478,10 @@ class PostgresPersistenceStore:
         limit: int = 50,
     ) -> list[JobPreparation]:
         async with self._session_factory() as session:
-            query = select(JobPreparationRow)
+            query = select(JobPreparationRow).where(
+                JobPreparationRow.include_in_history.is_(True),
+                JobPreparationRow.deleted_at.is_(None),
+            )
             if resume_id is not None:
                 query = query.join(
                     ResumeVersionRow,
@@ -489,3 +497,29 @@ class PostgresPersistenceStore:
 
             rows = (await session.scalars(query)).all()
             return [_job_preparation_from_row(row) for row in rows]
+
+    async def soft_delete_job_preparation(self, job_preparation_id: uuid.UUID) -> JobPreparation:
+        async with self._session_factory() as session, session.begin():
+            # Same SELECT ... FOR UPDATE reasoning as save_job_preparation/
+            # apply_resume_version: locks this row for the rest of the
+            # transaction so a concurrent delete (or any other mutation)
+            # against the same preparation can't interleave with this one.
+            current = (
+                await session.execute(
+                    select(JobPreparationRow)
+                    .where(JobPreparationRow.id == job_preparation_id)
+                    .with_for_update()
+                )
+            ).scalar_one_or_none()
+            if current is None:
+                raise JobPreparationNotFoundError(
+                    f"No job preparation with id {job_preparation_id!r}."
+                )
+            if current.deleted_at is not None:
+                # Idempotent -- see this method's Protocol docstring.
+                return _job_preparation_from_row(current)
+
+            current.deleted_at = datetime.now(UTC)
+            await session.flush()
+            await session.refresh(current)
+            return _job_preparation_from_row(current)

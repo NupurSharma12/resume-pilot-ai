@@ -1120,6 +1120,39 @@ describe('TailoredResumePage: download options', () => {
     })
   }
 
+  it('shows Download after a History rehydration, whose tailoringPlan only ever has plan_id + suggestions', () => {
+    // Exactly the shape `rehydrateFromJobPreparation` produces from a real
+    // persisted `JobPreparation` -- no `available_export_formats`/
+    // `default_export_format` on the plan itself (see
+    // `TailoringPlanContent`'s own docstring: those two fields are never
+    // persisted, for any preparation). `tailoringAvailableExportFormats`/
+    // `tailoringSourceFormat` are session-level fields set independently,
+    // exactly as rehydration sets them.
+    renderPageWithRealSession({
+      tailoringPlan: {
+        plan_id: fixtureGenerateSuggestionsResponse.plan_id,
+        suggestions: fixtureGenerateSuggestionsResponse.suggestions,
+      },
+      tailoringSelections: ['suggestion-0'],
+      tailoringAvailableExportFormats: ['txt', 'markdown', 'docx', 'pdf'],
+      tailoringSourceFormat: 'docx',
+      finalTailoredResume: {
+        finalResumeText: fixtureApplySuggestionsResponse.final_resume_text,
+        appliedSuggestionIds: fixtureApplySuggestionsResponse.applied_suggestion_ids,
+      },
+      tailoringValidationReport: null,
+      postApplyAnalysis: fixtureResumeAnalysis,
+      postApplyComparison: fixturePostApplyComparison,
+    })
+
+    expect(screen.getByRole('button', { name: /^download txt$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^download docx$/i })).toBeInTheDocument()
+    // Default format is derived from `tailoringSourceFormat` ('docx' here),
+    // not read off the plan (which has no such field) -- see
+    // defaultExportFormatForSourceFormat.
+    expect(screen.getByText('Default')).toBeInTheDocument()
+  })
+
   it('does not show Download at all until a post-apply re-analysis has completed', () => {
     renderPageWithRealSession({
       tailoringPlan: fixtureGenerateSuggestionsResponse,

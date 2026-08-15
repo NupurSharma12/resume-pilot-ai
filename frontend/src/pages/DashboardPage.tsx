@@ -89,7 +89,25 @@ export default function DashboardPage() {
   const topStrengths = resumeAnalysis ? deriveTopStrengths(resumeAnalysis) : []
   const topRisks = resumeAnalysis ? deriveTopRisks(resumeAnalysis) : []
 
-  const { setJobPreparationId, resetForNewAnalysis } = useResumeSession()
+  const { postApplyComparison, setJobPreparationId, resetForNewAnalysis } = useResumeSession()
+
+  // The match score shown here follows the same precedence Sidebar's
+  // `CandidateSummaryCard` already uses: the latest post-apply
+  // re-analysis once one exists, otherwise the original analysis.
+  // `resumeAnalysis` itself is never mutated for this -- it stays the
+  // immutable "before" snapshot for the lifetime of the session (see
+  // docs/features/postapply-analysis-loop.md and
+  // `ResumeSessionContext.resetForNewAnalysis`'s own docstring); only the
+  // *displayed* assessment overrides `overall_score`, keeping
+  // `hiring_recommendation`/`summary` as the original analysis produced
+  // them, since post-apply re-analysis doesn't carry its own values for
+  // those here (only `postApplyComparison.score_after` does).
+  const displayedOverallAssessment = resumeAnalysis
+    ? {
+        ...resumeAnalysis.overall_assessment,
+        overall_score: postApplyComparison?.score_after ?? resumeAnalysis.overall_assessment.overall_score,
+      }
+    : null
   const canAnalyze = Boolean(resume) && Boolean(jobDescription)
   const hasResult = status === 'success' && resumeAnalysis !== null
 
@@ -152,7 +170,7 @@ export default function DashboardPage() {
           <div ref={resultsRef} className="animate-panel-fade space-y-8">
             <CandidateHeroCard
               candidate={candidate}
-              overallAssessment={resumeAnalysis.overall_assessment}
+              overallAssessment={displayedOverallAssessment ?? resumeAnalysis.overall_assessment}
               skillMatches={resumeAnalysis.skill_matches}
               executiveSummary={executiveSummary}
             />

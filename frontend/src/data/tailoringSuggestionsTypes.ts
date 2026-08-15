@@ -51,9 +51,31 @@ export type FormatFidelity = 'exact_original' | 'approximate_style' | 'regenerat
 // file content, since no original file bytes are retained after upload.
 export type SourceFormat = 'pdf' | 'docx' | 'markdown' | 'plain_text'
 
-export interface GenerateSuggestionsResponse {
+// What's actually durable about a generated plan -- `plan_id` +
+// `suggestions` are the only two fields `record_generated_tailoring_plan`
+// persists into `job_preparations.tailoring_plan.generated_plan` (see
+// `app.api.v1.endpoints.tailoring_suggestions`'s own persistence call,
+// which passes `result.plan.model_dump(mode="json")` -- the internal
+// `SuggestionPlan` domain object, never the full HTTP response). Session
+// state that must survive both a live generation *and* a History
+// rehydration (`ResumeSessionContext.tailoringPlan`) is typed as this
+// narrower shape, not `GenerateSuggestionsResponse` below -- see
+// `rehydrateFromJobPreparation.ts`'s docstring for the bug this fixes.
+export interface TailoringPlanContent {
   plan_id: string
   suggestions: TailoringSuggestion[]
+}
+
+// The full `POST /v1/tailoring-suggestions` response. `available_export_formats`/
+// `default_export_format` are deliberately *not* part of `TailoringPlanContent`
+// above: the backend computes both fresh on every response (`_ALL_EXPORT_FORMATS`
+// is a constant; `default_export_format` is derived from the resume's
+// filename) and never persists either -- see `app.api.v1.endpoints.
+// tailoring_suggestions`'s own docstring. Any caller that needs "what
+// formats can this be downloaded as" should derive it the same
+// stateless way (see `lib/sourceFormat.ts`'s `ALL_EXPORT_FORMATS`/
+// `defaultExportFormatForSourceFormat`), not read it off a stored plan.
+export interface GenerateSuggestionsResponse extends TailoringPlanContent {
   available_export_formats: ExportFormat[]
   default_export_format: ExportFormat
 }

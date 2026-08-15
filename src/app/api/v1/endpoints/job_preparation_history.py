@@ -1,13 +1,24 @@
-"""History endpoints: `GET /v1/job-preparations*`.
+"""History endpoints: `GET /v1/job-preparations*`, `DELETE /v1/job-preparations/{id}`.
 
-Read-only: `JobPreparation` is written exclusively through
-`app.orchestration.job_preparation_persistence` (see the Post-Apply
-Analysis Loop / Job Preparation Checkpoints work) -- these two endpoints
-only ever call `PersistenceStore.list_job_preparations`/`get_job_preparation`,
-translate the result to a lightweight API shape, and return it. No
-checkpoint semantics live here beyond "a checkpoint is complete iff its
-timestamp is non-null" -- the same rule the persistence/orchestration
-layers already established.
+The two `GET` endpoints only ever call `PersistenceStore.
+list_job_preparations`/`get_job_preparation`, translate the result to a
+lightweight API shape, and return it -- no checkpoint semantics live here
+beyond "a checkpoint is complete iff its timestamp is non-null," the same
+rule the persistence/orchestration layers already established.
+`list_job_preparations` itself excludes test-only (`include_in_history=
+False`) and soft-deleted preparations (see `PersistenceStore.
+list_job_preparations`'s docstring) -- this endpoint applies no filtering
+of its own beyond what the store already guarantees.
+
+`DELETE` is the one write this file performs, and -- unlike the two reads
+above -- goes through `app.orchestration.job_preparation_persistence.
+delete_job_preparation` rather than calling the store directly, keeping
+"every durable write against `JobPreparation` goes through orchestration"
+true without exception (see that module's own docstring). It soft-deletes
+only (see `JobPreparation.deleted_at`'s docstring) -- `GET .../{id}`
+deliberately still returns a soft-deleted preparation unchanged (see
+`get_job_preparation` below), only `list_job_preparations` (History's
+listing) hides it.
 
 No authentication/ownership scoping exists yet (explicitly out of scope
 for this milestone -- see the History design review): every
@@ -27,7 +38,11 @@ from app.api.v1.models.job_preparation_history import (
     JobPreparationSummaryResponse,
 )
 from app.core.logging import get_logger
+from app.orchestration.job_preparation_persistence import (
+    delete_job_preparation as _delete_job_preparation,
+)
 from app.persistence.dependencies import get_persistence_store
+from app.persistence.errors import JobPreparationNotFoundError
 from app.persistence.models import JobPreparation
 from app.persistence.store import PersistenceStore
 
@@ -121,6 +136,17 @@ async def get_job_preparation(
     `applied_resume_version_id` via `get_resume_version` -- the applied
     text itself isn't duplicated into `JobPreparation` anywhere; it lives
     only on its own `ResumeVersion` row, same as every other version.
+
+    Deliberately does not filter on `deleted_at`/`include_in_history`: a
+    direct-by-id lookup is a different operation from History's listing
+    (`list_job_preparations`, which does exclude both), and a soft-deleted
+    or test-only preparation is still a fully valid, addressable record --
+    only its appearance in History's list is suppressed. Chosen over
+    rejecting the lookup because nothing about "delete" in this feature
+    means "this id no longer refers to anything" (see the soft-delete
+    design decision); a caller that already has this id (e.g. a stale
+    bookmark) still gets a truthful answer instead of a confusing 404 for
+    a record that, from the database's point of view, still exists.
     """
     job_preparation = await store.get_job_preparation(job_preparation_id)
     if job_preparation is None:
@@ -153,3 +179,27 @@ async def get_job_preparation(
         post_apply_analysis=job_preparation.post_apply_analysis,
         interview_preparation=job_preparation.interview_preparation,
     )
+
+
+@router.delete("/job-preparations/{job_preparation_id}", status_code=204)
+async def delete_job_preparation(
+    job_preparation_id: UUID,
+    store: PersistenceStore = Depends(get_persistence_store),
+) -> None:
+    """Soft-delete one job preparation -- the user-facing "Delete" action in History.
+
+    `404` if `job_preparation_id` was never created at all. Idempotent
+    for a preparation that's already soft-deleted (returns `204` again,
+    not `404`) -- see `PersistenceStore.soft_delete_job_preparation`'s
+    docstring for why "delete something already gone" is not treated as
+    an error here. No response body: this is a pure side-effecting
+    action with nothing new to hand back -- the caller (History's own
+    list, already holding this id) simply drops it from its own
+    displayed list on a successful `204`.
+    """
+    try:
+        await _delete_job_preparation(store, job_preparation_id)
+    except JobPreparationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Job preparation not found.") from exc
+
+    logger.info("job_preparation_deleted", job_preparation_id=str(job_preparation_id))

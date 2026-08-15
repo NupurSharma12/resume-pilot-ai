@@ -15,7 +15,7 @@ the generated analysis; see `analyze_resume`'s docstring.
 
 import time
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header
 
 from app.api.v1.models.analyze_resume import (
     AnalyzeResumeRequest,
@@ -83,6 +83,7 @@ async def analyze_resume(
     workflow: ResumeAnalysisWorkflow = Depends(get_resume_analysis_workflow),
     settings: Settings = Depends(get_settings),
     persistence_store: PersistenceStore = Depends(get_persistence_store),
+    x_e2e_test: bool = Header(False, alias="X-E2E-Test"),
 ) -> AnalyzeResumeResponse:
     """Analyze a resume against a job description and return the result.
 
@@ -106,6 +107,18 @@ async def analyze_resume(
     failure — see `ResumeAnalysisWorkflow`/`GeminiGateway`) and re-raised
     unchanged via a bare `raise`, so FastAPI's default error handling — and
     therefore the resulting HTTP response — is completely unaffected.
+
+    `X-E2E-Test: true` is a test-only opt-out signal (see the History Test
+    Isolation & Delete design review): it never appears in any real user
+    flow or UI, only in this codebase's own automated E2E fixtures/helpers
+    (`frontend/e2e/helpers/tailoringFlow.ts`). Its only effect is
+    `include_in_history=False` on the `JobPreparation` this call creates
+    below -- the preparation is still fully created and persisted, usable
+    by id like any other, it simply never appears in History's listing.
+    Absent (the unsafe-default concern this header is written to avoid),
+    it defaults to `False`, i.e. `include_in_history=True` -- ordinary
+    production behavior is completely unaffected by this header's
+    existence.
     """
     logger.info(
         "analyze_request_received",
@@ -145,6 +158,7 @@ async def analyze_resume(
             resume_text=payload.resume,
             job_description=payload.job_description,
             analysis_result=result.model_dump(mode="json"),
+            include_in_history=not x_e2e_test,
         )
     except Exception as exc:
         logger.error(

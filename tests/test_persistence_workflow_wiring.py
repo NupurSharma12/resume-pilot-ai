@@ -97,7 +97,9 @@ def _skills_item_id() -> str:
 
 
 async def test_job_preparation_id_threads_through_the_full_workflow() -> None:
-    settings = Settings(log_json=False, gemini_api_key="test-gemini-api-key")
+    settings = Settings(
+        log_json=False, gemini_api_key="test-gemini-api-key", persistence_backend="memory"
+    )
     app = create_app(settings)
     app.dependency_overrides[get_resume_analysis_workflow] = lambda: ResumeAnalysisWorkflow(
         prompt_builder=ResumeAnalysisPromptBuilder(),

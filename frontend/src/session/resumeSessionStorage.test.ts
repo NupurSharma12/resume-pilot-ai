@@ -60,8 +60,6 @@ describe('sessionStorageResumeSessionStorage', () => {
       tailoringPlan: {
         plan_id: 'plan-1',
         suggestions: [],
-        available_export_formats: ['txt', 'pdf'],
-        default_export_format: 'txt',
       },
       tailoringSelections: ['suggestion-0'],
       tailoringCustomInstructions: 'Keep it under two pages.',

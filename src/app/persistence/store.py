@@ -100,6 +100,7 @@ class PersistenceStore(Protocol):
         job_title: str,
         job_description: str,
         company: str | None = None,
+        include_in_history: bool = True,
     ) -> JobPreparation:
         """Start a new `JobPreparation` from an existing resume version, in `status=draft`.
 
@@ -107,6 +108,13 @@ class PersistenceStore(Protocol):
         `None`; `save_job_preparation` is how they get filled in as the
         workflow progresses. Raises `ResumeVersionNotFoundError` if
         `source_resume_version_id` does not exist.
+
+        `include_in_history` defaults to `True` -- the safe default for
+        every real user flow (see this method's callers in
+        `app.orchestration.job_preparation_persistence`). Only automated
+        E2E tests ever pass `False`, so their preparations are fully
+        persisted and usable by id (e.g. `get_job_preparation`) without
+        ever showing up in `list_job_preparations`'s History listing.
         """
         ...
 
@@ -197,5 +205,30 @@ class PersistenceStore(Protocol):
         result count (no cursor/offset pagination -- not yet needed by any
         caller). Returns an empty list if nothing matches, matching this
         store's existing "absence, not an exception" read convention.
+
+        Always excludes `include_in_history=False` (test-only) and
+        soft-deleted (`deleted_at IS NOT NULL`) preparations -- this is
+        History's one listing query, so both exclusions live here rather
+        than as caller-supplied filters. `get_job_preparation` is
+        unaffected by either: a direct by-id lookup still returns a
+        soft-deleted or test-only preparation, since both remain fully
+        valid, addressable records -- only their appearance in this list
+        is suppressed.
+        """
+        ...
+
+    async def soft_delete_job_preparation(self, job_preparation_id: UUID) -> JobPreparation:
+        """Mark `job_preparation_id` as deleted from History (sets `deleted_at`), transactionally.
+
+        The user-facing "Delete" action's only backend effect: the row
+        itself is never physically removed (see `JobPreparation.deleted_at`'s
+        docstring for why -- this is deliberately distinct from a future,
+        not-yet-built permanent-purge capability). Idempotent: calling
+        this again on an already-soft-deleted preparation succeeds and
+        simply returns its current state unchanged, rather than raising --
+        "delete something that's already gone" is not an error condition
+        a caller needs to handle specially. Raises
+        `JobPreparationNotFoundError` only if `job_preparation_id` was
+        never created at all.
         """
         ...

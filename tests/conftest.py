@@ -16,7 +16,9 @@ from app.core.config import Settings  # noqa: E402
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(log_json=False, gemini_api_key="test-gemini-api-key")
+    return Settings(
+        log_json=False, gemini_api_key="test-gemini-api-key", persistence_backend="memory"
+    )
 
 
 @pytest.fixture
