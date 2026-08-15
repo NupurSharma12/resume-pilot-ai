@@ -104,6 +104,7 @@ class InMemoryPersistenceStore:
         job_title: str,
         job_description: str,
         company: str | None = None,
+        include_in_history: bool = True,
     ) -> JobPreparation:
         if source_resume_version_id not in self._resume_versions:
             raise ResumeVersionNotFoundError(
@@ -131,6 +132,8 @@ class InMemoryPersistenceStore:
             status=JobPreparationStatus.DRAFT,
             created_at=now,
             updated_at=now,
+            include_in_history=include_in_history,
+            deleted_at=None,
         )
         self._job_preparations[job_preparation.id] = job_preparation
         return job_preparation
@@ -225,7 +228,11 @@ class InMemoryPersistenceStore:
         updated_after: datetime | None = None,
         limit: int = 50,
     ) -> list[JobPreparation]:
-        results = list(self._job_preparations.values())
+        results = [
+            jp
+            for jp in self._job_preparations.values()
+            if jp.include_in_history and jp.deleted_at is None
+        ]
         if resume_id is not None:
             results = [
                 jp
@@ -240,3 +247,15 @@ class InMemoryPersistenceStore:
             results = [jp for jp in results if jp.updated_at > updated_after]
         results.sort(key=lambda jp: jp.updated_at, reverse=True)
         return results[:limit]
+
+    async def soft_delete_job_preparation(self, job_preparation_id: UUID) -> JobPreparation:
+        current = self._job_preparations.get(job_preparation_id)
+        if current is None:
+            raise JobPreparationNotFoundError(f"No job preparation with id {job_preparation_id!r}.")
+        if current.deleted_at is not None:
+            return current
+
+        now = datetime.now(UTC)
+        updated = current.model_copy(update={"deleted_at": now, "updated_at": now})
+        self._job_preparations[updated.id] = updated
+        return updated

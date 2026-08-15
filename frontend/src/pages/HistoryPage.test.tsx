@@ -484,7 +484,7 @@ describe('HistoryPage', () => {
       ...fixtureDetail,
       checkpoints: fixtureCheckpointsPartial,
     })
-    rehydrateFromHistory.mockReturnValue('/tailored-resume')
+    rehydrateFromHistory.mockReturnValue({ ok: true, nextRoute: '/tailored-resume' })
 
     renderPage()
     await waitFor(() =>
@@ -525,5 +525,117 @@ describe('HistoryPage', () => {
     expect(screen.getByText('Continue this preparation?')).toBeInTheDocument()
     expect(rehydrateFromHistory).not.toHaveBeenCalled()
     expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  it('shows a graceful error in the dialog when rehydration itself reports invalid persisted data, without navigating', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue([
+      { ...fixtureSummary, checkpoints: fixtureCheckpointsPartial },
+    ])
+    mockedApi.getJobPreparation.mockResolvedValue({
+      ...fixtureDetail,
+      checkpoints: fixtureCheckpointsPartial,
+    })
+    rehydrateFromHistory.mockReturnValue({
+      ok: false,
+      error: "This preparation's saved analysis can't be restored.",
+    })
+
+    renderPage()
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Continue Preparation' })).toBeInTheDocument(),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Continue Preparation' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("This preparation's saved analysis can't be restored."),
+      ).toBeInTheDocument(),
+    )
+    expect(screen.getByText('Continue this preparation?')).toBeInTheDocument()
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  it('Delete opens a confirmation dialog', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+    expect(screen.getByText('Delete this preparation?')).toBeInTheDocument()
+    expect(screen.getByText('This will remove it from your History.')).toBeInTheDocument()
+    expect(mockedApi.deleteJobPreparation).not.toHaveBeenCalled()
+  })
+
+  it('Cancel does not delete', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(screen.queryByText('Delete this preparation?')).not.toBeInTheDocument()
+    expect(mockedApi.deleteJobPreparation).not.toHaveBeenCalled()
+    // Still in the list -- nothing was removed.
+    expect(screen.getByText('Senior Engineer')).toBeInTheDocument()
+  })
+
+  it('Confirm soft-deletes and the preparation disappears from History without a reload', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.deleteJobPreparation.mockResolvedValue(undefined)
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => expect(mockedApi.deleteJobPreparation).toHaveBeenCalledWith('job-prep-1'))
+    await waitFor(() =>
+      expect(screen.queryByText('Delete this preparation?')).not.toBeInTheDocument(),
+    )
+    expect(screen.queryByText('Senior Engineer')).not.toBeInTheDocument()
+    // No second fetch of the list -- removed client-side from the
+    // already-loaded items, per the design review's "no full reload".
+    expect(mockedApi.listJobPreparations).toHaveBeenCalledTimes(1)
+  })
+
+  it('deleting an already-deleted/nonexistent preparation is handled cleanly (treated as success)', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.deleteJobPreparation.mockRejectedValue(
+      new ApiError('This job preparation no longer exists.', { cause: 'not_found' }),
+    )
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() =>
+      expect(screen.queryByText('Delete this preparation?')).not.toBeInTheDocument(),
+    )
+    expect(screen.queryByText('Senior Engineer')).not.toBeInTheDocument()
+  })
+
+  it('shows an inline error in the dialog when delete fails for another reason, without closing it', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.deleteJobPreparation.mockRejectedValue(
+      new ApiError('Could not reach the history service. Is the backend running?'),
+    )
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Could not reach the history service. Is the backend running?'),
+      ).toBeInTheDocument(),
+    )
+    expect(screen.getByText('Delete this preparation?')).toBeInTheDocument()
+    // Still in the list -- the failed delete never removed it.
+    expect(screen.getByText('Senior Engineer')).toBeInTheDocument()
   })
 })

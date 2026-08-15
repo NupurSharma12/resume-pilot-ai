@@ -7,6 +7,7 @@ import * as resumeSessionContext from '../session/ResumeSessionContext'
 import { fixtureResume, fixtureJobDescription, fixtureResumeAnalysis } from '../testFixtures'
 import type { DashboardOutletContext } from '../layouts/DashboardLayout'
 import type { ResumeSessionContextValue } from '../session/ResumeSessionContext'
+import type { ResumeAnalysisComparison } from '../data/postApplyTypes'
 
 vi.mock('../lib/api')
 vi.mock('../session/ResumeSessionContext', async (importOriginal) => {
@@ -129,5 +130,69 @@ describe('DashboardPage handleAnalyze', () => {
     const setJobPreparationIdOrder = vi.mocked(sessionValue.setJobPreparationId).mock
       .invocationCallOrder[0]
     expect(resetOrder).toBeLessThan(setJobPreparationIdOrder)
+  })
+})
+
+describe('DashboardPage score consistency', () => {
+  const fixtureOriginalAnalysis = {
+    ...fixtureResumeAnalysis,
+    overall_assessment: { ...fixtureResumeAnalysis.overall_assessment, overall_score: 92 },
+  }
+
+  const fixturePostApplyComparison: ResumeAnalysisComparison = {
+    score_before: 92,
+    score_after: 93,
+    score_delta: 1,
+    status: 'improved',
+    category_comparisons: [],
+    strengths_gained: [],
+    strengths_lost: [],
+    weaknesses_resolved: [],
+    weaknesses_remaining: [],
+    new_weaknesses: [],
+  }
+
+  it('shows the post-apply score (93), not the original analysis score (92), once a re-analysis exists', () => {
+    mockedUseResumeSession.mockReturnValue(
+      makeResumeSessionValue({ postApplyComparison: fixturePostApplyComparison }),
+    )
+
+    renderPage({ resumeAnalysis: fixtureOriginalAnalysis, status: 'success' })
+
+    expect(screen.getByText('93%')).toBeInTheDocument()
+    expect(screen.queryByText('92%')).not.toBeInTheDocument()
+  })
+
+  it('shows the original analysis score (92) before any re-analysis exists', () => {
+    mockedUseResumeSession.mockReturnValue(makeResumeSessionValue({ postApplyComparison: null }))
+
+    renderPage({ resumeAnalysis: fixtureOriginalAnalysis, status: 'success' })
+
+    expect(screen.getByText('92%')).toBeInTheDocument()
+    expect(screen.queryByText('93%')).not.toBeInTheDocument()
+  })
+
+  it("does not mutate resumeAnalysis itself -- it stays the immutable 'before' snapshot", () => {
+    const sessionValue = makeResumeSessionValue({ postApplyComparison: fixturePostApplyComparison })
+    mockedUseResumeSession.mockReturnValue(sessionValue)
+
+    renderPage({ resumeAnalysis: fixtureOriginalAnalysis, status: 'success' })
+
+    expect(screen.getByText('93%')).toBeInTheDocument()
+    // The session's own resumeAnalysis object is never reassigned to
+    // reflect the post-apply score -- only what CandidateHeroCard is
+    // handed for *display* changes (see DashboardPage's
+    // `displayedOverallAssessment`).
+    expect(sessionValue.setResumeAnalysis).not.toHaveBeenCalled()
+  })
+
+  it('existing fresh-session behavior (no post-apply state at all) is unchanged', () => {
+    mockedUseResumeSession.mockReturnValue(makeResumeSessionValue())
+
+    renderPage({ resumeAnalysis: fixtureResumeAnalysis, status: 'success' })
+
+    expect(
+      screen.getByText(`${fixtureResumeAnalysis.overall_assessment.overall_score}%`),
+    ).toBeInTheDocument()
   })
 })

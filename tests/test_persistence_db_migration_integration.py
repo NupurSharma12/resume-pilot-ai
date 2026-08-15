@@ -172,6 +172,80 @@ def test_job_preparations_has_the_five_checkpoint_timestamp_columns(
         assert columns[column_name]["nullable"] is True, column_name
 
 
+def test_job_preparations_has_include_in_history_and_deleted_at_columns(
+    migrated_database: str,
+) -> None:
+    schema = asyncio.run(_reflect(migrated_database))
+
+    columns = schema["job_preparations"]["columns"]
+    assert columns["include_in_history"]["nullable"] is False
+    assert columns["deleted_at"]["nullable"] is True
+
+
+async def _insert_job_preparation_without_history_columns(url: str) -> tuple[bool, object]:
+    """Insert a row the same way every pre-migration `JobPreparation` was created: no
+
+    `include_in_history`/`deleted_at` in the `INSERT` at all -- exactly what a real
+    historical row (created before this migration existed) looks like. Reading it
+    back is what proves the migration's `server_default` -- not merely
+    `PostgresPersistenceStore`'s own Python-side default -- is what makes an
+    existing row backfill as "visible in History, not deleted," independent of
+    which code path inserted it.
+    """
+    from sqlalchemy import select
+
+    from app.persistence.db.tables import JobPreparationRow, ResumeRow, ResumeVersionRow
+
+    engine = create_async_engine(url)
+    try:
+        resume_id = uuid.uuid4()
+        version_id = uuid.uuid4()
+        job_preparation_id = uuid.uuid4()
+        async with engine.begin() as connection:
+            await connection.execute(
+                ResumeRow.__table__.insert().values(id=resume_id, name="Alice")
+            )
+            await connection.execute(
+                ResumeVersionRow.__table__.insert().values(
+                    id=version_id,
+                    resume_id=resume_id,
+                    version_number=1,
+                    content="Original resume text",
+                    source="original_upload",
+                )
+            )
+            await connection.execute(
+                JobPreparationRow.__table__.insert().values(
+                    id=job_preparation_id,
+                    source_resume_version_id=version_id,
+                    job_title="Backend Engineer",
+                    job_description="Build things.",
+                    status="draft",
+                )
+            )
+        async with engine.begin() as connection:
+            row = (
+                await connection.execute(
+                    select(
+                        JobPreparationRow.include_in_history, JobPreparationRow.deleted_at
+                    ).where(JobPreparationRow.id == job_preparation_id)
+                )
+            ).one()
+        return True, row
+    finally:
+        await engine.dispose()
+
+
+def test_existing_style_row_backfills_as_included_in_history_and_not_deleted(
+    migrated_database: str,
+) -> None:
+    """The "existing rows migrate safely" requirement, proven against the real database."""
+    _, row = asyncio.run(_insert_job_preparation_without_history_columns(migrated_database))
+
+    assert row.include_in_history is True
+    assert row.deleted_at is None
+
+
 def test_checkpoint_consistency_constraint_rejects_a_payload_without_its_timestamp(
     migrated_database: str,
 ) -> None:

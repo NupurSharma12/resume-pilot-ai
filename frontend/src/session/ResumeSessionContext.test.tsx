@@ -72,12 +72,14 @@ function createFakeStorage(initial: PersistedResumeSession | null = null): Resum
 function Probe() {
   const session = useResumeSession()
   const [nextRoute, setNextRoute] = useState<string | null>(null)
+  const [rehydrationError, setRehydrationError] = useState<string | null>(null)
   return (
     <div>
       <span data-testid="hydration">{session.hydrationStatus}</span>
       <span data-testid="resume">{session.resume?.fileName ?? 'none'}</span>
       <span data-testid="jobDescription">{session.jobDescription?.text ?? 'none'}</span>
       <span data-testid="nextRoute">{nextRoute ?? 'none'}</span>
+      <span data-testid="rehydrationError">{rehydrationError ?? 'none'}</span>
       <span data-testid="status">{session.status}</span>
       <span data-testid="sessionId">{session.activeCareerConversationSessionId ?? 'none'}</span>
       <span data-testid="conversationStatus">{session.careerConversationStatus ?? 'none'}</span>
@@ -102,9 +104,31 @@ function Probe() {
       </button>
       <button onClick={() => session.resetForNewAnalysis()}>reset-for-new-analysis</button>
       <button
-        onClick={() => setNextRoute(session.rehydrateFromHistory(fixtureJobPreparationDetail))}
+        onClick={() => {
+          const outcome = session.rehydrateFromHistory(fixtureJobPreparationDetail)
+          if (outcome.ok) {
+            setNextRoute(outcome.nextRoute)
+          } else {
+            setRehydrationError(outcome.error)
+          }
+        }}
       >
         rehydrate-from-history
+      </button>
+      <button
+        onClick={() => {
+          const outcome = session.rehydrateFromHistory({
+            ...fixtureJobPreparationDetail,
+            analysis_result: { overall_assessment: { overall_score: 72 } },
+          })
+          if (outcome.ok) {
+            setNextRoute(outcome.nextRoute)
+          } else {
+            setRehydrationError(outcome.error)
+          }
+        }}
+      >
+        rehydrate-from-history-with-malformed-analysis
       </button>
       <button onClick={() => session.setStatus('loading')}>set-loading</button>
       <button onClick={() => session.setActiveCareerConversationSessionId('conv-1')}>
@@ -404,6 +428,29 @@ describe('ResumeSessionProvider', () => {
     // Career Conversation is complete but Tailoring Plan is not -- Continue
     // should land on Tailored Resume next (see nextRouteForCheckpoints).
     expect(screen.getByTestId('nextRoute').textContent).toBe('/tailored-resume')
+  })
+
+  it('rehydrateFromHistory fails gracefully on a malformed analysis_result, leaving state untouched', async () => {
+    const storage = createFakeStorage(
+      fixturePersistedSession({ jobPreparationId: 'previous-job-prep' }),
+    )
+    render(
+      <ResumeSessionProvider storage={storage}>
+        <Probe />
+      </ResumeSessionProvider>,
+    )
+    await waitFor(() => expect(screen.getByTestId('hydration').textContent).toBe('hydrated'))
+    expect(screen.getByTestId('jobPreparationId').textContent).toBe('previous-job-prep')
+
+    await act(async () => {
+      screen.getByText('rehydrate-from-history-with-malformed-analysis').click()
+    })
+
+    expect(screen.getByTestId('rehydrationError').textContent).toMatch(/can't be restored/i)
+    // Nothing was mutated -- the previous session's own state (unrelated
+    // to this failed rehydration attempt) is exactly as it was before.
+    expect(screen.getByTestId('jobPreparationId').textContent).toBe('previous-job-prep')
+    expect(screen.getByTestId('nextRoute').textContent).toBe('none')
   })
 
   it('throws a clear error if useResumeSession is used outside the provider', () => {

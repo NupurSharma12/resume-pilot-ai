@@ -32,7 +32,9 @@ async def api_client_factory():
     clients: list[AsyncClient] = []
 
     async def _factory() -> tuple[AsyncClient, object]:
-        settings = Settings(log_json=False, gemini_api_key="test-gemini-api-key")
+        settings = Settings(
+            log_json=False, gemini_api_key="test-gemini-api-key", persistence_backend="memory"
+        )
         app = create_app(settings)
         transport = ASGITransport(app=app)
         client = AsyncClient(transport=transport, base_url="http://testserver")
@@ -262,3 +264,118 @@ async def test_get_reflects_apply_succeeded_but_reanalysis_not_yet_run(
     assert checkpoints["post_apply_analysis_completed_at"] is None
     assert body["post_apply_analysis"] is None
     assert body["applied_resume_text"] == "Tailored text"
+
+
+# ---- History Test Isolation & Delete ------------------------------------
+
+
+async def test_list_excludes_a_preparation_with_include_in_history_false(
+    api_client_factory,
+) -> None:
+    client, store = await api_client_factory()
+    await start_job_preparation(
+        store,
+        resume_text="E2E test resume.",
+        job_description="E2E test JD.",
+        analysis_result=_ANALYSIS,
+        include_in_history=False,
+    )
+
+    response = await client.get("/v1/job-preparations")
+
+    assert response.json() == {"items": []}
+
+
+async def test_list_includes_a_normal_preparation_alongside_an_excluded_one(
+    api_client_factory,
+) -> None:
+    client, store = await api_client_factory()
+    real = await start_job_preparation(
+        store,
+        resume_text="Real resume.",
+        job_description="Real JD.",
+        analysis_result=_ANALYSIS,
+    )
+    await start_job_preparation(
+        store,
+        resume_text="E2E test resume.",
+        job_description="E2E test JD.",
+        analysis_result=_ANALYSIS,
+        include_in_history=False,
+    )
+
+    response = await client.get("/v1/job-preparations")
+
+    ids = [item["id"] for item in response.json()["items"]]
+    assert ids == [str(real.id)]
+
+
+async def test_get_returns_a_test_only_preparation_directly_by_id(api_client_factory) -> None:
+    """A test-only preparation is still fully addressable by id -- only hidden from the list."""
+    client, store = await api_client_factory()
+    job_preparation = await start_job_preparation(
+        store,
+        resume_text="E2E test resume.",
+        job_description="E2E test JD.",
+        analysis_result=_ANALYSIS,
+        include_in_history=False,
+    )
+
+    response = await client.get(f"/v1/job-preparations/{job_preparation.id}")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == str(job_preparation.id)
+
+
+async def test_delete_removes_a_preparation_from_the_list(api_client_factory) -> None:
+    client, store = await api_client_factory()
+    job_preparation = await start_job_preparation(
+        store, resume_text="Resume text", job_description="JD text", analysis_result=_ANALYSIS
+    )
+
+    delete_response = await client.delete(f"/v1/job-preparations/{job_preparation.id}")
+
+    assert delete_response.status_code == 204
+    list_response = await client.get("/v1/job-preparations")
+    assert list_response.json() == {"items": []}
+
+
+async def test_delete_does_not_remove_the_row_get_by_id_still_returns_it(
+    api_client_factory,
+) -> None:
+    """Chosen behavior: `GET .../{id}` still returns a soft-deleted preparation -- see that
+
+    endpoint's own docstring for why (a direct-by-id lookup is a
+    different operation from History's listing).
+    """
+    client, store = await api_client_factory()
+    job_preparation = await start_job_preparation(
+        store, resume_text="Resume text", job_description="JD text", analysis_result=_ANALYSIS
+    )
+
+    await client.delete(f"/v1/job-preparations/{job_preparation.id}")
+    response = await client.get(f"/v1/job-preparations/{job_preparation.id}")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == str(job_preparation.id)
+
+
+async def test_delete_for_an_unknown_id_returns_404(api_client_factory) -> None:
+    client, _store = await api_client_factory()
+
+    response = await client.delete(f"/v1/job-preparations/{uuid4()}")
+
+    assert response.status_code == 404
+
+
+async def test_delete_is_idempotent_for_an_already_deleted_preparation(api_client_factory) -> None:
+    client, store = await api_client_factory()
+    job_preparation = await start_job_preparation(
+        store, resume_text="Resume text", job_description="JD text", analysis_result=_ANALYSIS
+    )
+
+    first = await client.delete(f"/v1/job-preparations/{job_preparation.id}")
+    second = await client.delete(f"/v1/job-preparations/{job_preparation.id}")
+
+    assert first.status_code == 204
+    assert second.status_code == 204

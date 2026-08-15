@@ -18,7 +18,17 @@ need.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -173,6 +183,19 @@ class JobPreparationRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+    # History Test Isolation & Delete (see that design review): both
+    # columns default so every pre-existing row (migrated before either
+    # existed) reads as "a real, visible-in-History, not-deleted
+    # preparation" -- exactly what every row created before this feature
+    # actually was. `server_default=text("true")` (not `default=True`,
+    # which is Python/ORM-side only) is what makes that default apply to
+    # the migration's `ADD COLUMN` itself, for every existing row, not
+    # just future inserts.
+    include_in_history: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
 
     __table_args__ = (
         # See ResumeVersionRow's __table_args__ for why `name=` is the

@@ -28,7 +28,12 @@ import {
 } from '../lib/tailoringSuggestionsApi'
 import { reanalyzeAfterApply } from '../lib/postApplyApi'
 import { ApiError } from '../lib/api'
-import { candidateFilenameBase, detectSourceFormatFromFilename } from '../lib/sourceFormat'
+import {
+  ALL_EXPORT_FORMATS,
+  candidateFilenameBase,
+  defaultExportFormatForSourceFormat,
+  detectSourceFormatFromFilename,
+} from '../lib/sourceFormat'
 import { useResumeSession } from '../session/ResumeSessionContext'
 import type { DashboardOutletContext } from '../layouts/DashboardLayout'
 import type {
@@ -217,7 +222,11 @@ export default function TailoredResumePage() {
       setTailoringEditedTexts({})
       setFinalTailoredResume(null)
       setTailoringValidationReport(null)
-      setTailoringAvailableExportFormats(plan.available_export_formats)
+      // Always the full, constant list -- see ALL_EXPORT_FORMATS's own
+      // docstring for why this is never read off `plan` itself (the
+      // backend computes it fresh for every response, identically,
+      // rather than it varying by plan).
+      setTailoringAvailableExportFormats(ALL_EXPORT_FORMATS)
       setTailoringSourceFormat(detectSourceFormatFromFilename(resume.fileName))
       setIsPreviewOpen(false)
       setPreviewResult(null)
@@ -426,7 +435,7 @@ export default function TailoredResumePage() {
     setTailoringPlanStatus('idle')
     setTailoringSelections(remapped.selections)
     setTailoringEditedTexts(remapped.editedTexts)
-    setTailoringAvailableExportFormats(newPlan.available_export_formats)
+    setTailoringAvailableExportFormats(ALL_EXPORT_FORMATS)
     setTailoringSourceFormat(detectSourceFormatFromFilename(resume.fileName))
     setIsRecovering(false)
 
@@ -903,7 +912,7 @@ export default function TailoredResumePage() {
                         {availableFormats.length > 0 && (
                           <TailoringDownloadPanel
                             availableFormats={availableFormats}
-                            defaultFormat={tailoringPlan.default_export_format}
+                            defaultFormat={defaultExportFormatForSourceFormat(tailoringSourceFormat)}
                             sourceFormat={tailoringSourceFormat}
                             exportingFormat={exportingFormat}
                             exportError={exportError || null}

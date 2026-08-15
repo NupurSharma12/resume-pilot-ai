@@ -10,7 +10,7 @@ covers the "does this actually work against real PostgreSQL" question
 this file deliberately does not.
 """
 
-from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, ForeignKeyConstraint, Index, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.types import TIMESTAMP
@@ -189,6 +189,22 @@ class TestJobPreparationsTable:
             assert column.type.timezone is True
             assert column.nullable is False
             assert column.server_default is not None
+
+    def test_include_in_history_is_not_null_boolean_defaulting_true(self) -> None:
+        column = Base.metadata.tables["job_preparations"].c.include_in_history
+        assert isinstance(column.type, Boolean)
+        assert column.nullable is False
+        # A server-side default (not just a Python/ORM-side one) is what
+        # makes every pre-existing row read as "visible in History" the
+        # instant this column is added by the migration -- see
+        # JobPreparationRow's own docstring.
+        assert column.server_default is not None
+
+    def test_deleted_at_is_a_nullable_timestamptz(self) -> None:
+        column = Base.metadata.tables["job_preparations"].c.deleted_at
+        assert isinstance(column.type, TIMESTAMP)
+        assert column.type.timezone is True
+        assert column.nullable is True
 
     def test_updated_at_has_an_onupdate_mechanism_configured(self) -> None:
         column = Base.metadata.tables["job_preparations"].c.updated_at

@@ -162,3 +162,28 @@ class JobPreparation(BaseModel):
     status: JobPreparationStatus = Field(description="Current lifecycle state.")
     created_at: datetime = Field(description="When this preparation was created.")
     updated_at: datetime = Field(description="When this preparation was last saved.")
+
+    # History-visibility flag, independent of everything above -- see the
+    # History Test Isolation & Delete design review. `False` is set only
+    # by automated E2E tests (via `POST /v1/analyze`'s `X-E2E-Test`
+    # header, see `analyze.py`), never by any real user flow or UI
+    # control, so real preparations always default to `True`. Deliberately
+    # a plain flag, not folded into `status`: it answers "should this ever
+    # show up in History," an orthogonal question to the preparation's own
+    # workflow lifecycle.
+    include_in_history: bool = Field(
+        default=True, description="Whether this preparation may appear in History at all."
+    )
+    # Soft-delete marker for the user-facing "Delete" action in History.
+    # NULL means not deleted. Sets a timestamp rather than a bool so a
+    # future permanent-purge job (explicitly out of scope today -- see
+    # that design review's "Do not implement a complicated permanent-
+    # delete workflow yet") has "how long has this been soft-deleted" for
+    # free, without a schema change. `get_job_preparation` deliberately
+    # does not filter on this (a soft-deleted preparation is still a
+    # valid target for a direct-by-id lookup, e.g. Continue's rehydration
+    # if it were somehow still linked to); only `list_job_preparations`
+    # (History's listing) excludes it, alongside `include_in_history`.
+    deleted_at: datetime | None = Field(
+        default=None, description="When this preparation was soft-deleted from History, or null."
+    )

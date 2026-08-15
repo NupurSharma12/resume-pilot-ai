@@ -1,10 +1,13 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
 
-type ButtonVariant = 'outline' | 'solid'
+type ButtonVariant = 'outline' | 'solid' | 'danger'
 
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   outline: 'bg-white text-gray-900 border border-gray-200 hover:bg-gray-50',
   solid: 'bg-indigo-600 text-white border border-indigo-600 hover:bg-indigo-700',
+  // Destructive actions only -- see DeleteConfirmationDialog, the one
+  // place this is used today.
+  danger: 'bg-rose-600 text-white border border-rose-600 hover:bg-rose-700',
 }
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {

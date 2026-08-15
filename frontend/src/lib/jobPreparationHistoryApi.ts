@@ -95,3 +95,30 @@ export async function generateInterviewPreparation(
 
   return (await response.json()) as InterviewPreparation
 }
+
+// Calls the backend's DELETE /v1/job-preparations/{id} -- the user-facing
+// "Delete" action in History. Soft-delete only (see that endpoint's own
+// docstring): the preparation is no longer returned by
+// `listJobPreparations`, but this call itself has no response body to
+// return. `404` (`cause: 'not_found'`) means the preparation was never
+// there to begin with -- HistoryPage treats that the same as a successful
+// delete (the desired end state, "not in History," already holds), same
+// convention as `getJobPreparation`'s `not_found` classification.
+export async function deleteJobPreparation(jobPreparationId: string): Promise<void> {
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}/v1/job-preparations/${jobPreparationId}`, {
+      method: 'DELETE',
+    })
+  } catch {
+    throw new ApiError('Could not reach the history service. Is the backend running?')
+  }
+
+  if (response.status === 404) {
+    throw new ApiError('This job preparation no longer exists.', { cause: 'not_found' })
+  }
+
+  if (!response.ok) {
+    throw new ApiError(`Deleting this job preparation failed (HTTP ${response.status}).`)
+  }
+}

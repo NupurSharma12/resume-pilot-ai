@@ -82,6 +82,7 @@ async def start_job_preparation(
     analysis_result: dict,
     job_title: str | None = None,
     company: str | None = None,
+    include_in_history: bool = True,
 ) -> JobPreparation:
     """Boundaries A + B + C: record a new resume upload, job preparation, and its analysis.
 
@@ -99,6 +100,12 @@ async def start_job_preparation(
     `create_job_preparation`) to `active` in the same call that attaches
     `analysis_result` — `draft` on its own is not otherwise observable by
     any caller of this function.
+
+    `include_in_history` defaults to `True` (every real user flow) and is
+    threaded straight through to `create_job_preparation` -- see
+    `PersistenceStore.create_job_preparation`'s own docstring for who
+    passes `False` and why (only automated E2E tests, via `POST
+    /v1/analyze`'s `X-E2E-Test` header).
     """
     resume = await store.create_resume(
         name=_label_from_text(resume_text, fallback="Untitled résumé")
@@ -111,6 +118,7 @@ async def start_job_preparation(
         job_title=job_title or _label_from_text(job_description, fallback="Untitled role"),
         job_description=job_description,
         company=company,
+        include_in_history=include_in_history,
     )
     return await store.save_job_preparation(
         job_preparation.model_copy(
@@ -248,3 +256,25 @@ async def record_post_apply_analysis(
             }
         )
     )
+
+
+async def delete_job_preparation(
+    store: PersistenceStore, job_preparation_id: UUID
+) -> JobPreparation:
+    """The user-facing "Delete" action in History: soft-deletes one preparation.
+
+    Thin pass-through to `PersistenceStore.soft_delete_job_preparation` --
+    unlike every other function in this module, this doesn't read-then-
+    `save_job_preparation`, since soft-delete is its own atomic store
+    operation (see that method's docstring for why: it needs its own
+    row-level lock, the same reasoning `apply_resume_version` already
+    uses). Kept here anyway, rather than called directly from the API
+    layer, so every durable write against `JobPreparation` -- including
+    this one -- still goes through exactly one module, matching this
+    file's own docstring ("API endpoints call these directly; the LLM
+    workflows themselves stay entirely unaware that persistence exists").
+    Raises `JobPreparationNotFoundError` if `job_preparation_id` was never
+    created; idempotent for an already-deleted preparation (see the store
+    method's docstring).
+    """
+    return await store.soft_delete_job_preparation(job_preparation_id)

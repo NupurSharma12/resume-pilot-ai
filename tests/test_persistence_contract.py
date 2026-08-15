@@ -506,3 +506,129 @@ async def test_json_fields_round_trip_nested_structures_faithfully(
     reread = await store.get_job_preparation(preparation.id)
     assert reread.tailoring_plan == tailoring_plan
     assert reread.post_apply_analysis == post_apply_analysis
+
+
+# ---- History Test Isolation & Delete ------------------------------------
+
+
+async def test_create_job_preparation_defaults_to_included_in_history(
+    store: PersistenceStore,
+) -> None:
+    """The safe default: every real caller that doesn't pass `include_in_history` is visible."""
+    _resume, version = await _seed_resume_version(store)
+    company = f"Acme-{uuid.uuid4()}"
+
+    preparation = await store.create_job_preparation(
+        source_resume_version_id=version.id,
+        job_title="Backend Engineer",
+        job_description="Build things.",
+        company=company,
+    )
+
+    assert preparation.include_in_history is True
+    assert preparation.deleted_at is None
+    # Scoped by a unique `company` (not asserting the listing is empty
+    # otherwise) -- a real, shared PostgresPersistenceStore accumulates
+    # rows from every other test in this session, unlike a fresh
+    # InMemoryPersistenceStore per test; `company`/`job_title` are the
+    # same plain-column filters `list_job_preparations` already supports
+    # for exactly this kind of scoping (see its own docstring).
+    assert [jp.id for jp in await store.list_job_preparations(company=company)] == [preparation.id]
+
+
+async def test_create_job_preparation_with_include_in_history_false_is_excluded_from_listing(
+    store: PersistenceStore,
+) -> None:
+    _resume, version = await _seed_resume_version(store)
+    company = f"Acme-{uuid.uuid4()}"
+
+    test_preparation = await store.create_job_preparation(
+        source_resume_version_id=version.id,
+        job_title="E2E Test Preparation",
+        job_description="Build things.",
+        company=company,
+        include_in_history=False,
+    )
+
+    assert test_preparation.include_in_history is False
+    assert await store.list_job_preparations(company=company) == []
+    # Still fully persisted and addressable by id -- only excluded from the listing.
+    assert await store.get_job_preparation(test_preparation.id) == test_preparation
+
+
+async def test_list_job_preparations_mixes_history_and_test_preparations_correctly(
+    store: PersistenceStore,
+) -> None:
+    _resume, version = await _seed_resume_version(store)
+    company = f"Acme-{uuid.uuid4()}"
+    real = await store.create_job_preparation(
+        source_resume_version_id=version.id,
+        job_title="Real Preparation",
+        job_description="Build things.",
+        company=company,
+    )
+    await store.create_job_preparation(
+        source_resume_version_id=version.id,
+        job_title="Test Preparation",
+        job_description="Build things.",
+        company=company,
+        include_in_history=False,
+    )
+
+    assert [jp.id for jp in await store.list_job_preparations(company=company)] == [real.id]
+
+
+async def test_soft_delete_removes_a_preparation_from_the_listing(
+    store: PersistenceStore,
+) -> None:
+    _resume, version = await _seed_resume_version(store)
+    company = f"Acme-{uuid.uuid4()}"
+    preparation = await store.create_job_preparation(
+        source_resume_version_id=version.id,
+        job_title="Backend Engineer",
+        job_description="Build things.",
+        company=company,
+    )
+    assert [jp.id for jp in await store.list_job_preparations(company=company)] == [preparation.id]
+
+    deleted = await store.soft_delete_job_preparation(preparation.id)
+
+    assert deleted.deleted_at is not None
+    assert await store.list_job_preparations(company=company) == []
+
+
+async def test_soft_delete_does_not_remove_the_row_itself(store: PersistenceStore) -> None:
+    """`get_job_preparation` is unaffected by soft-delete -- only the listing is."""
+    _resume, version = await _seed_resume_version(store)
+    preparation = await store.create_job_preparation(
+        source_resume_version_id=version.id,
+        job_title="Backend Engineer",
+        job_description="Build things.",
+    )
+
+    await store.soft_delete_job_preparation(preparation.id)
+
+    reread = await store.get_job_preparation(preparation.id)
+    assert reread is not None
+    assert reread.deleted_at is not None
+    assert reread.job_title == "Backend Engineer"
+
+
+async def test_soft_delete_is_idempotent(store: PersistenceStore) -> None:
+    _resume, version = await _seed_resume_version(store)
+    preparation = await store.create_job_preparation(
+        source_resume_version_id=version.id,
+        job_title="Backend Engineer",
+        job_description="Build things.",
+    )
+
+    first = await store.soft_delete_job_preparation(preparation.id)
+    second = await store.soft_delete_job_preparation(preparation.id)
+
+    assert first.deleted_at is not None
+    assert second.deleted_at is not None
+
+
+async def test_soft_delete_for_an_unknown_id_raises(store: PersistenceStore) -> None:
+    with pytest.raises(JobPreparationNotFoundError):
+        await store.soft_delete_job_preparation(uuid.uuid4())

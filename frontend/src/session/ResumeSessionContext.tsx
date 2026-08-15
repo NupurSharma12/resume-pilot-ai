@@ -5,8 +5,8 @@ import type { JobDescriptionInputValue } from '../components/JobDescriptionInput
 import type {
   ExportFormat,
   FinalValidationReport,
-  GenerateSuggestionsResponse,
   SourceFormat,
+  TailoringPlanContent,
 } from '../data/tailoringSuggestionsTypes'
 import type { ResumeAnalysisComparison } from '../data/postApplyTypes'
 import {
@@ -22,7 +22,7 @@ import {
   type TailoringPlanStatus,
 } from './resumeSessionTypes'
 import { sessionStorageResumeSessionStorage } from './resumeSessionStorage'
-import { rehydrateFromJobPreparation } from './rehydrateFromJobPreparation'
+import { rehydrateFromJobPreparation, type RehydrationOutcome } from './rehydrateFromJobPreparation'
 import type { JobPreparationDetail } from '../data/jobPreparationHistoryTypes'
 
 // Distinguishes "haven't looked at storage yet" from "looked, found
@@ -55,8 +55,8 @@ export interface ResumeSessionContextValue {
   // call and is the single source of truth every review-stage component
   // reads suggestions from -- selections/edits below reference it by
   // `suggestion_id`, never a copy of its content.
-  tailoringPlan: GenerateSuggestionsResponse | null
-  setTailoringPlan: (plan: GenerateSuggestionsResponse | null) => void
+  tailoringPlan: TailoringPlanContent | null
+  setTailoringPlan: (plan: TailoringPlanContent | null) => void
   tailoringPlanStatus: TailoringPlanStatus
   setTailoringPlanStatus: (status: TailoringPlanStatus) => void
   tailoringSelections: string[]
@@ -120,13 +120,19 @@ export interface ResumeSessionContextValue {
   // endpoint). Mirrors `resetForNewAnalysis`'s "pure mapper +
   // setter-calling wrapper" split: `rehydrateFromJobPreparation`
   // (session/rehydrateFromJobPreparation.ts) does the actual field
-  // mapping, this just applies its result to the context. Returns the
-  // route the caller should navigate to next, derived from which
-  // checkpoint is the latest one completed -- callers (today, only
-  // HistoryPage's Continue confirmation) navigate there themselves; this
-  // never navigates on its own, matching every other session mutation
-  // here.
-  rehydrateFromHistory: (detail: JobPreparationDetail) => string
+  // mapping *and* validation, this just applies its result to the
+  // context. Returns a discriminated union, not a bare route string: an
+  // invalid persisted `analysis_result` is a real, expected outcome (see
+  // `rehydrateFromJobPreparation`'s docstring), so the context state is
+  // left completely untouched on `ok: false` -- no setter runs -- and
+  // the caller (today, only HistoryPage's Continue confirmation) shows
+  // `error` in place of navigating. On `ok: true`, `nextRoute` is where
+  // the caller should navigate next, derived from which checkpoint is
+  // the latest one completed; this never navigates on its own, matching
+  // every other session mutation here.
+  rehydrateFromHistory: (
+    detail: JobPreparationDetail,
+  ) => { ok: true; nextRoute: string } | { ok: false; error: string }
 
   clearSession: () => void
 }
@@ -156,7 +162,7 @@ export function ResumeSessionProvider({
   const [careerConversationStatus, setCareerConversationStatus] =
     useState<CareerConversationStatus | null>(null)
 
-  const [tailoringPlan, setTailoringPlan] = useState<GenerateSuggestionsResponse | null>(null)
+  const [tailoringPlan, setTailoringPlan] = useState<TailoringPlanContent | null>(null)
   const [tailoringPlanStatus, setTailoringPlanStatus] = useState<TailoringPlanStatus>('idle')
   const [tailoringSelections, setTailoringSelections] = useState<string[]>([])
   const [tailoringCustomInstructions, setTailoringCustomInstructions] = useState('')
@@ -285,8 +291,20 @@ export function ResumeSessionProvider({
     setPostApplyAnalysisStatus('idle')
   }
 
-  function rehydrateFromHistory(detail: JobPreparationDetail): string {
-    const rehydrated = rehydrateFromJobPreparation(detail)
+  function rehydrateFromHistory(
+    detail: JobPreparationDetail,
+  ): { ok: true; nextRoute: string } | { ok: false; error: string } {
+    const outcome: RehydrationOutcome = rehydrateFromJobPreparation(detail)
+    if (!outcome.ok) {
+      // Nothing below runs -- context state is left exactly as it was
+      // before this call, so a failed Continue can never leave a
+      // half-rehydrated session behind. See rehydrateFromJobPreparation's
+      // own docstring for why this is an expected outcome, not a thrown
+      // exception.
+      return outcome
+    }
+
+    const rehydrated = outcome.session
     setResume(rehydrated.resume)
     setJobDescription(rehydrated.jobDescription)
     setResumeAnalysis(rehydrated.resumeAnalysis)
@@ -308,7 +326,7 @@ export function ResumeSessionProvider({
     setPostApplyAnalysis(rehydrated.postApplyAnalysis)
     setPostApplyComparison(rehydrated.postApplyComparison)
     setPostApplyAnalysisStatus('idle')
-    return rehydrated.nextRoute
+    return { ok: true, nextRoute: rehydrated.nextRoute }
   }
 
   function clearSession() {

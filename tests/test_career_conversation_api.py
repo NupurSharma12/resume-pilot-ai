@@ -62,7 +62,9 @@ async def api_client_factory():
     async def _factory(
         decisions: list[ConversationTurnDecision], delay_seconds: float = 0
     ) -> AsyncClient:
-        settings = Settings(log_json=False, gemini_api_key="test-gemini-api-key")
+        settings = Settings(
+            log_json=False, gemini_api_key="test-gemini-api-key", persistence_backend="memory"
+        )
         app = create_app(settings)
         gateway = FakeGateway(decisions, delay_seconds=delay_seconds)
         app.dependency_overrides[get_career_conversation_workflow] = lambda: (
