@@ -94,7 +94,10 @@ test.describe('job_preparation_id propagation', () => {
       .click()
     await expect(page).toHaveURL(/\/tailored-resume$/)
     await page.getByRole('button', { name: 'Generate Tailoring Plan' }).click()
-    await expect(page.getByRole('heading', { name: 'Review Suggestions' })).toBeVisible()
+    // The mocked plan has zero suggestions -- a valid, successful outcome
+    // (see TailoredResumePage's zero-suggestions branch), not the
+    // suggestion-review UI.
+    await expect(page.getByText(/no changes recommended/i)).toBeVisible()
 
     expect((generateRequestBody as unknown as { job_preparation_id?: string })?.job_preparation_id).toBe(
       JOB_PREPARATION_ID,

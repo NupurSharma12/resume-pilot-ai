@@ -133,12 +133,33 @@ const appliedDetail = detailFor(applied, {
   applied_resume_text: 'SUMMARY\nSenior backend engineer with distributed systems experience.\nPython, TypeScript',
 })
 
-const allSummaries = [analysisOnly, conversationComplete, tailoringPlanGenerated, applied]
+// A plan the AI generated with zero suggestions: a valid, successful
+// outcome (the resume already aligns well with the job description), not
+// yet acted on -- distinct from `applied` above, whose plan has a real
+// suggestion and an `applied_resume_text`.
+const generatedPlanNoChanges = {
+  plan_id: 'e2e-plan-no-changes',
+  suggestions: [],
+  available_export_formats: ['txt'],
+  default_export_format: 'txt',
+}
+const tailoringPlanNoChanges = summaryFor('e2e-jp-no-changes', 'Continue No Changes Recommended', {
+  ...baseCheckpoints,
+  career_conversation_completed_at: '2026-08-01T10:05:00Z',
+  tailoring_plan_completed_at: '2026-08-01T10:10:00Z',
+})
+const tailoringPlanNoChangesDetail = detailFor(tailoringPlanNoChanges, {
+  career_conversation: conversationCompleteDetail.career_conversation,
+  tailoring_plan: { generated_plan: generatedPlanNoChanges, selection: null },
+})
+
+const allSummaries = [analysisOnly, conversationComplete, tailoringPlanGenerated, applied, tailoringPlanNoChanges]
 const detailsById: Record<string, unknown> = {
   [analysisOnly.id]: analysisOnlyDetail,
   [conversationComplete.id]: conversationCompleteDetail,
   [tailoringPlanGenerated.id]: tailoringPlanGeneratedDetail,
   [applied.id]: appliedDetail,
+  [tailoringPlanNoChanges.id]: tailoringPlanNoChangesDetail,
 }
 
 test.describe('History Resumability: Continue', () => {
@@ -221,7 +242,51 @@ test.describe('History Resumability: Continue', () => {
 
     await expect(page).toHaveURL(/\/tailored-resume$/)
     await expect(page.getByText('The job description asks for TypeScript.')).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Generate Tailoring Plan' })).not.toBeVisible()
+    // Exact match: 'Generate Tailoring Plan' is a substring of the CTA that
+    // *does* render here, 'Regenerate Tailoring Plan' (see
+    // TailoredResumePage's shared instructionsCard).
+    await expect(
+      page.getByRole('button', { name: 'Generate Tailoring Plan', exact: true }),
+    ).not.toBeVisible()
+    await expect(page.getByRole('button', { name: 'Regenerate Tailoring Plan' })).toBeVisible()
+  })
+
+  test('continuing a preparation with a zero-suggestion plan offers "Continue with Current Resume", distinct from awaiting-review and no-plan states', async ({
+    page,
+  }) => {
+    await openContinueDialog(page, tailoringPlanNoChanges.job_title)
+    await page.getByRole('dialog').getByRole('button', { name: 'Continue' }).click()
+
+    await expect(page).toHaveURL(/\/tailored-resume$/)
+    await expect(page.getByText(/no changes recommended/i)).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Continue with Current Resume' })).toBeVisible()
+    // Not the "no plan yet" state, and not the suggestion-review UI.
+    await expect(
+      page.getByRole('button', { name: 'Generate Tailoring Plan', exact: true }),
+    ).not.toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Review Suggestions' })).not.toBeVisible()
+
+    let applyRequestBody: Record<string, unknown> | null = null
+    await page.route('**/v1/tailoring-suggestions/e2e-plan-no-changes/apply', async (route) => {
+      applyRequestBody = route.request().postDataJSON()
+      await route.fulfill({
+        json: {
+          applied_suggestion_ids: [],
+          final_resume_text: RESUME_TEXT,
+          final_validation: { is_valid: true, messages: [] },
+        },
+      })
+    })
+
+    await page.getByRole('button', { name: 'Continue with Current Resume' }).click()
+
+    await expect(page.getByText(/final resume preview/i)).toBeVisible()
+    await expect(page.getByRole('button', { name: /re-analyze & compare/i })).toBeVisible()
+    await expect(page.getByRole('button', { name: /^download txt$/i })).not.toBeVisible()
+    await expect(page.getByText(/no changes recommended/i)).not.toBeVisible()
+    expect((applyRequestBody as unknown as { selected_suggestion_ids?: string[] })?.selected_suggestion_ids).toEqual(
+      [],
+    )
   })
 
   test('continuing an applied-but-not-reanalyzed preparation lands on Tailored Resume showing the final resume and a Re-analyze prompt', async ({

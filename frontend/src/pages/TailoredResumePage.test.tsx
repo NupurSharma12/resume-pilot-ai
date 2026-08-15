@@ -440,6 +440,228 @@ describe('TailoredResumePage: generating suggestions', () => {
   })
 })
 
+describe('TailoredResumePage: generate/regenerate CTA next to custom instructions', () => {
+  it('shows "Generate Tailoring Plan" next to the instructions textarea when no plan exists yet', () => {
+    mockedUseResumeSession.mockReturnValue(makeResumeSessionValue())
+
+    renderPage()
+
+    const textarea = screen.getByPlaceholderText(/optional instructions/i)
+    const cta = screen.getByRole('button', { name: /generate tailoring plan/i })
+    expect(textarea).toBeInTheDocument()
+    expect(cta).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^regenerate tailoring plan$/i })).not.toBeInTheDocument()
+  })
+
+  it('shows "Regenerate Tailoring Plan" next to the instructions textarea once a plan exists', () => {
+    mockedUseResumeSession.mockReturnValue(
+      makeResumeSessionValue({
+        tailoringPlan: fixtureGenerateSuggestionsResponse,
+        tailoringSelections: ['suggestion-0', 'suggestion-1'],
+        tailoringAvailableExportFormats: fixtureGenerateSuggestionsResponse.available_export_formats,
+      }),
+    )
+
+    renderPage()
+
+    expect(screen.getByRole('button', { name: /^regenerate tailoring plan$/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^generate tailoring plan$/i })).not.toBeInTheDocument()
+  })
+
+  it('clicking "Regenerate Tailoring Plan" invokes the existing generate flow with the current instructions', async () => {
+    mockedCareerConversationApi.getCareerConversation.mockResolvedValue(fixtureCompletedSession)
+    mockedTailoringApi.generateTailoringSuggestions.mockResolvedValue(fixtureGenerateSuggestionsResponse)
+
+    renderPageWithRealSession({
+      tailoringPlan: fixtureGenerateSuggestionsResponse,
+      tailoringSelections: ['suggestion-0', 'suggestion-1'],
+      tailoringAvailableExportFormats: fixtureGenerateSuggestionsResponse.available_export_formats,
+      tailoringCustomInstructions: 'Keep it under two pages.',
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /^regenerate tailoring plan$/i }))
+
+    await waitFor(() =>
+      expect(mockedTailoringApi.generateTailoringSuggestions).toHaveBeenCalledWith(
+        fixtureResume.text,
+        fixtureJobDescription.text,
+        fixtureResumeAnalysis,
+        fixtureCompletedSession,
+        'Keep it under two pages.',
+        fixtureResume.fileName,
+        null,
+      ),
+    )
+  })
+
+  it('typing instructions alone never invokes generation', () => {
+    mockedUseResumeSession.mockReturnValue(
+      makeResumeSessionValue({
+        tailoringPlan: fixtureGenerateSuggestionsResponse,
+        tailoringSelections: ['suggestion-0', 'suggestion-1'],
+        tailoringAvailableExportFormats: fixtureGenerateSuggestionsResponse.available_export_formats,
+      }),
+    )
+
+    renderPage()
+    const textarea = screen.getByPlaceholderText(/optional instructions/i)
+    fireEvent.change(textarea, { target: { value: 'Keep the resume under two pages.' } })
+
+    expect(mockedTailoringApi.generateTailoringSuggestions).not.toHaveBeenCalled()
+  })
+
+  it('Preview Changes still works independently of the generate/regenerate CTA', async () => {
+    mockedTailoringApi.applyTailoringSuggestions.mockResolvedValue(fixtureApplySuggestionsResponse)
+
+    renderPageWithRealSession({
+      tailoringPlan: fixtureGenerateSuggestionsResponse,
+      tailoringSelections: ['suggestion-0', 'suggestion-1'],
+      tailoringAvailableExportFormats: fixtureGenerateSuggestionsResponse.available_export_formats,
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /preview changes/i }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /apply now/i })).toBeInTheDocument(),
+    )
+    expect(mockedTailoringApi.generateTailoringSuggestions).not.toHaveBeenCalled()
+  })
+})
+
+describe('TailoredResumePage: a plan with zero suggestions is a valid outcome, not an error', () => {
+  const planWithNoSuggestions = {
+    ...fixtureGenerateSuggestionsResponse,
+    suggestions: [],
+  }
+
+  it('shows "No changes recommended" with a Continue CTA, never the "no plan yet" empty state', () => {
+    mockedUseResumeSession.mockReturnValue(
+      makeResumeSessionValue({
+        tailoringPlan: planWithNoSuggestions,
+        tailoringSelections: [],
+        tailoringAvailableExportFormats: planWithNoSuggestions.available_export_formats,
+      }),
+    )
+
+    renderPage()
+
+    expect(screen.getByText(/no changes recommended/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /continue with current resume/i })).toBeInTheDocument()
+    expect(
+      screen.queryByText(/nothing about your resume changes yet/i),
+    ).not.toBeInTheDocument()
+    // Secondary option, colocated with the instructions textarea.
+    expect(screen.getByRole('button', { name: /^regenerate tailoring plan$/i })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText(/optional instructions/i)).toBeInTheDocument()
+  })
+
+  it('does not show the suggestion-review chrome (Select All/Clear All/Preview Changes) when there is nothing to review', () => {
+    mockedUseResumeSession.mockReturnValue(
+      makeResumeSessionValue({
+        tailoringPlan: planWithNoSuggestions,
+        tailoringSelections: [],
+        tailoringAvailableExportFormats: planWithNoSuggestions.available_export_formats,
+      }),
+    )
+
+    renderPage()
+
+    expect(screen.queryByRole('button', { name: /select all/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /clear all/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /preview changes/i })).not.toBeInTheDocument()
+  })
+
+  it('clicking Regenerate from the zero-suggestion state re-generates using current instructions', async () => {
+    mockedCareerConversationApi.getCareerConversation.mockResolvedValue(fixtureCompletedSession)
+    mockedTailoringApi.generateTailoringSuggestions.mockResolvedValue(fixtureGenerateSuggestionsResponse)
+
+    renderPageWithRealSession({
+      tailoringPlan: planWithNoSuggestions,
+      tailoringSelections: [],
+      tailoringAvailableExportFormats: planWithNoSuggestions.available_export_formats,
+      tailoringCustomInstructions: 'Emphasize leadership experience.',
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /^regenerate tailoring plan$/i }))
+
+    await waitFor(() =>
+      expect(mockedTailoringApi.generateTailoringSuggestions).toHaveBeenCalledWith(
+        fixtureResume.text,
+        fixtureJobDescription.text,
+        fixtureResumeAnalysis,
+        fixtureCompletedSession,
+        'Emphasize leadership experience.',
+        fixtureResume.fileName,
+        null,
+      ),
+    )
+    await waitFor(() =>
+      expect(screen.getByText(fixtureSuggestionAppend.reason)).toBeInTheDocument(),
+    )
+  })
+
+  it('"Continue with Current Resume" commits directly (no preview step) with zero selections, producing the unchanged resume as the final resume', async () => {
+    const unchangedApplyResponse = {
+      applied_suggestion_ids: [],
+      final_resume_text: fixtureResume.text,
+      final_validation: { is_valid: true, messages: [] },
+    }
+    mockedTailoringApi.applyTailoringSuggestions.mockResolvedValue(unchangedApplyResponse)
+
+    renderPageWithRealSession({
+      tailoringPlan: planWithNoSuggestions,
+      tailoringSelections: [],
+      tailoringAvailableExportFormats: planWithNoSuggestions.available_export_formats,
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: /continue with current resume/i }))
+
+    await waitFor(() =>
+      expect(mockedTailoringApi.applyTailoringSuggestions).toHaveBeenCalledWith(
+        planWithNoSuggestions.plan_id,
+        [],
+        {},
+      ),
+    )
+    // Reuses the existing final-resume flow -- same card, same gating on
+    // Download until re-analysis, nothing new.
+    await waitFor(() => expect(screen.getByText(/final resume preview/i)).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /re-analyze & compare/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^download txt$/i })).not.toBeInTheDocument()
+    // The "No changes recommended" prompt is replaced by the final resume,
+    // not shown alongside it.
+    expect(screen.queryByText(/no changes recommended/i)).not.toBeInTheDocument()
+    // Regenerate remains available even after continuing unchanged.
+    expect(screen.getByRole('button', { name: /^regenerate tailoring plan$/i })).toBeInTheDocument()
+  })
+
+  it('an already-committed unchanged resume (e.g. restored from a refresh or History rehydration) shows the final-resume flow directly, distinct from the awaiting-review and no-plan states', () => {
+    mockedUseResumeSession.mockReturnValue(
+      makeResumeSessionValue({
+        tailoringPlan: planWithNoSuggestions,
+        tailoringSelections: [],
+        tailoringAvailableExportFormats: planWithNoSuggestions.available_export_formats,
+        finalTailoredResume: {
+          finalResumeText: fixtureResume.text,
+          appliedSuggestionIds: [],
+        },
+        tailoringValidationReport: { is_valid: true, messages: [] },
+      }),
+    )
+
+    renderPage()
+
+    expect(screen.getByText(/final resume preview/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /re-analyze & compare/i })).toBeInTheDocument()
+    // Not the pre-commit prompt, not the "no plan yet" state, not the
+    // suggestion-review UI.
+    expect(screen.queryByText(/no changes recommended/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /continue with current resume/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^generate tailoring plan$/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: /review suggestions/i })).not.toBeInTheDocument()
+  })
+})
+
 describe('TailoredResumePage: reviewing and selecting suggestions', () => {
   function renderWithPlan(overrides: Partial<PersistedResumeSession> = {}) {
     return renderPageWithRealSession({
