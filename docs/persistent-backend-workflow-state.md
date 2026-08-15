@@ -1,10 +1,15 @@
 # Persistent Backend Workflow State
 
 ## Status
-Implemented (Phase 3): the persistence abstraction (Phase 1: schema/store; Phase 2: PostgreSQL
-backend) is now wired into the real application lifecycle and the real resume/tailoring workflow.
-Interview Preparation, History UI, and multi-user/authorization remain future work -- see
-"Phase 3 scope" below.
+Implemented (Phase 3, plus later work built on top of it): the persistence abstraction (Phase 1:
+schema/store; Phase 2: PostgreSQL backend) is wired into the real application lifecycle and the
+real resume/tailoring workflow. History UI (`GET /v1/job-preparations*`, `HistoryPage`) and
+Interview Preparation (`job_preparations.interview_preparation`, its three-stage lifecycle -- see
+`docs/features/interview-preparation-engine.md`'s "Implementation status (v1)") have both since
+been built on top of this durable store. Threading `job_preparation_id` through the actual
+frontend session state (`jobPreparationId` on `ResumeSessionContext`, called out below as "Phase 4
+work") is also done. Multi-user/authorization remains future work -- nothing in this application
+scopes a `JobPreparation` to a user/account yet.
 
 ## Why this matters
 
@@ -143,6 +148,7 @@ functions, not a service framework) called from three endpoint modules:
 | E: tailoring plan (generated half) | `POST /v1/tailoring-suggestions` | `tailoring_plan.generated_plan` (`selection` starts null) |
 | E + F: tailoring plan (selection) + apply | `POST /v1/tailoring-suggestions/{plan_id}/apply` | One new `ResumeVersion(applied)`, `applied_resume_version_id`, and `tailoring_plan.selection` |
 | G: post-apply analysis | `POST /v1/tailoring-suggestions/{plan_id}/reanalyze` | `post_apply_analysis` (`analysis` + `comparison` + `reanalyzed_at`) |
+| Interview Preparation | `POST /v1/job-preparations/{id}/interview-preparation` | `interview_preparation` (`InterviewPreparationResult`, including `stage`) -- see `docs/features/interview-preparation-engine.md`. Built later, on top of this same store; deliberately no new checkpoint timestamp. |
 
 `POST /v1/analyze` is where boundaries A, B, and C collapse into one request: this backend is
 otherwise stateless per call (no separate "upload" endpoint exists -- resume text extraction
@@ -158,7 +164,9 @@ exactly once more: as an optional `job_preparation_id` on `StartConversationRequ
 `job_description` already does -- `/answer`, `/apply`, `/export`, and `/reanalyze` never need it
 re-sent. Omitting it anywhere is a no-op, not an error: every existing request/response field is
 unchanged, so current frontend behavior is unaffected by this phase. Threading this id through the
-actual frontend session state is Phase 4 work.
+actual frontend session state (`jobPreparationId` on `ResumeSessionContext`, called "Phase 4 work"
+when this was originally written) is now also done -- see
+`docs/frontend/resume-session-state.md`.
 
 **Completion is deliberately never triggered automatically.** The frozen rule
 (`completed -> applied_resume_version_id IS NOT NULL`) is a necessary condition enforced by the

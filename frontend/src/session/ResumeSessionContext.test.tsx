@@ -2,12 +2,27 @@ import { describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, act } from '@testing-library/react'
 import { ResumeSessionProvider, useResumeSession } from './ResumeSessionContext'
 import type { PersistedResumeSession, ResumeSessionStorage } from './resumeSessionTypes'
+import type { ResumeAnalysisComparison } from '../data/postApplyTypes'
 import {
   fixtureApplySuggestionsResponse,
   fixtureGenerateSuggestionsResponse,
   fixturePersistedSession,
   fixtureResume,
+  fixtureResumeAnalysis,
 } from '../testFixtures'
+
+const fixturePostApplyComparison: ResumeAnalysisComparison = {
+  score_before: fixtureResumeAnalysis.overall_assessment.overall_score,
+  score_after: 91,
+  score_delta: 91 - fixtureResumeAnalysis.overall_assessment.overall_score,
+  status: 'improved',
+  category_comparisons: [],
+  strengths_gained: [],
+  strengths_lost: [],
+  weaknesses_resolved: [],
+  weaknesses_remaining: [],
+  new_weaknesses: [],
+}
 
 function createFakeStorage(initial: PersistedResumeSession | null = null): ResumeSessionStorage & {
   saves: PersistedResumeSession[]
@@ -40,7 +55,22 @@ function Probe() {
       <span data-testid="tailoringSelections">{session.tailoringSelections.join(',')}</span>
       <span data-testid="customInstructions">{session.tailoringCustomInstructions}</span>
       <span data-testid="finalResume">{session.finalTailoredResume ? 'present' : 'none'}</span>
+      <span data-testid="postApplyComparison">
+        {session.postApplyComparison ? 'present' : 'none'}
+      </span>
+      <span data-testid="jobPreparationId">{session.jobPreparationId ?? 'none'}</span>
+      <span data-testid="resumeAnalysis">{session.resumeAnalysis ? 'present' : 'none'}</span>
       <button onClick={() => session.setResume(fixtureResume)}>set-resume</button>
+      <button onClick={() => session.setResumeAnalysis(fixtureResumeAnalysis)}>
+        set-resume-analysis
+      </button>
+      <button onClick={() => session.setJobPreparationId('job-prep-1')}>
+        set-job-preparation-id
+      </button>
+      <button onClick={() => session.setPostApplyComparison(fixturePostApplyComparison)}>
+        set-post-apply-comparison
+      </button>
+      <button onClick={() => session.resetForNewAnalysis()}>reset-for-new-analysis</button>
       <button onClick={() => session.setStatus('loading')}>set-loading</button>
       <button onClick={() => session.setActiveCareerConversationSessionId('conv-1')}>
         set-session-id
@@ -192,6 +222,54 @@ describe('ResumeSessionProvider', () => {
     expect(screen.getByTestId('tailoringSelections').textContent).toBe('')
     expect(screen.getByTestId('customInstructions').textContent).toBe('')
     expect(screen.getByTestId('finalResume').textContent).toBe('none')
+  })
+
+  it('resetForNewAnalysis clears Career Conversation/tailoring/post-apply state but preserves resume/analysis/jobPreparationId', async () => {
+    const storage = createFakeStorage(
+      fixturePersistedSession({
+        activeCareerConversationSessionId: 'conv-1',
+        careerConversationStatus: 'complete',
+        tailoringPlan: fixtureGenerateSuggestionsResponse,
+        tailoringSelections: ['suggestion-0'],
+        tailoringCustomInstructions: 'Keep it short.',
+        finalTailoredResume: {
+          finalResumeText: fixtureApplySuggestionsResponse.final_resume_text,
+          appliedSuggestionIds: fixtureApplySuggestionsResponse.applied_suggestion_ids,
+        },
+        jobPreparationId: 'previous-job-prep',
+      }),
+    )
+    render(
+      <ResumeSessionProvider storage={storage}>
+        <Probe />
+      </ResumeSessionProvider>,
+    )
+    await waitFor(() => expect(screen.getByTestId('resume').textContent).toBe('resume.txt'))
+    await act(async () => {
+      screen.getByText('set-post-apply-comparison').click()
+    })
+    expect(screen.getByTestId('postApplyComparison').textContent).toBe('present')
+
+    await act(async () => {
+      screen.getByText('reset-for-new-analysis').click()
+    })
+
+    // Career Conversation, tailoring, and post-apply state all belonged
+    // to the *previous* analysis's JobPreparation -- gone.
+    expect(screen.getByTestId('sessionId').textContent).toBe('none')
+    expect(screen.getByTestId('conversationStatus').textContent).toBe('none')
+    expect(screen.getByTestId('tailoringPlan').textContent).toBe('none')
+    expect(screen.getByTestId('tailoringSelections').textContent).toBe('')
+    expect(screen.getByTestId('customInstructions').textContent).toBe('')
+    expect(screen.getByTestId('finalResume').textContent).toBe('none')
+    expect(screen.getByTestId('postApplyComparison').textContent).toBe('none')
+    // But `resume`/`resumeAnalysis`/`jobPreparationId` are untouched --
+    // `DashboardPage.handleAnalyze` is the one that overwrites these,
+    // immediately after calling resetForNewAnalysis, with the *new*
+    // analysis's own values; resetForNewAnalysis itself must never race
+    // or clobber that.
+    expect(screen.getByTestId('resume').textContent).toBe('resume.txt')
+    expect(screen.getByTestId('jobPreparationId').textContent).toBe('previous-job-prep')
   })
 
   it('rehydrates tailoring plan, selections, custom instructions, and final resume from storage', async () => {

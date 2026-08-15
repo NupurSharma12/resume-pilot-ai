@@ -89,7 +89,7 @@ export default function DashboardPage() {
   const topStrengths = resumeAnalysis ? deriveTopStrengths(resumeAnalysis) : []
   const topRisks = resumeAnalysis ? deriveTopRisks(resumeAnalysis) : []
 
-  const { setJobPreparationId } = useResumeSession()
+  const { setJobPreparationId, resetForNewAnalysis } = useResumeSession()
   const canAnalyze = Boolean(resume) && Boolean(jobDescription)
   const hasResult = status === 'success' && resumeAnalysis !== null
 
@@ -99,6 +99,14 @@ export default function DashboardPage() {
     setStatus('loading')
     try {
       const { analysis, jobPreparationId } = await analyzeResume(resume.text, jobDescription.text)
+      // A successful analyze always creates a brand-new, unrelated
+      // JobPreparation on the backend -- any Career Conversation/
+      // tailoring/post-apply state still in this session describes the
+      // *previous* preparation and must not leak into this one (e.g. the
+      // Sidebar's candidate score showing a stale post-apply comparison
+      // from an earlier, unrelated analysis -- see resetForNewAnalysis's
+      // own docstring).
+      resetForNewAnalysis()
       setResumeAnalysis(analysis)
       setJobPreparationId(jobPreparationId)
       setSelectedCategory(analysis.skill_matches[0]?.category)
