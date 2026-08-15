@@ -24,14 +24,31 @@ SPA link navigation does not).
 ## What's owned where
 
 `ResumeSessionProvider` (`frontend/src/session/ResumeSessionContext.tsx`)
-now owns:
+now owns every piece of state a page needs to survive a reload, not just the
+original four fields this doc was first written for:
 
-- `resume`
-- `jobDescription`
-- `resumeAnalysis`
-- `status`
-- `activeCareerConversationSessionId`
+- `resume`, `jobDescription`, `resumeAnalysis`, `status`
 - `hydrationStatus` (`'pending' | 'hydrated'`)
+- `jobPreparationId` — the durable `JobPreparation` this session is
+  recorded against on the backend (see
+  `docs/persistent-backend-workflow-state.md`); threaded to Career
+  Conversation and Tailoring generation so their own durable history
+  attaches to the same preparation.
+- Career Conversation: `activeCareerConversationSessionId`,
+  `careerConversationStatus`
+- Interactive Tailoring (`docs/features/interactive-tailored-resume.md`):
+  `tailoringPlan`, `tailoringPlanStatus`, `tailoringSelections`,
+  `tailoringCustomInstructions`, `tailoringEditedTexts`,
+  `finalTailoredResume`, `tailoringValidationReport`,
+  `tailoringAvailableExportFormats`, `tailoringSourceFormat`
+- Post-Apply Analysis Loop (`docs/features/postapply-analysis-loop.md`):
+  `postApplyAnalysis`, `postApplyComparison`, `postApplyAnalysisStatus`
+
+Interview Preparation (`docs/features/interview-preparation-engine.md`)
+deliberately owns none of its own state here: the active
+`InterviewPreparationPage` reads/writes it straight from the backend, keyed
+by `jobPreparationId`, exactly the way History does — see that doc's
+"Implementation status" section.
 
 `DashboardLayout` still owns, locally, exactly two things that have no
 business surviving a reload: `errorMessage` (an in-flight error's text) and
@@ -47,18 +64,31 @@ exactly as before — `DashboardLayout` composes that context from
 `sessionStorageResumeSessionStorage` (`frontend/src/session/resumeSessionStorage.ts`)
 writes one namespaced key, `resumepilot.resumeSession.v1`, to
 `window.sessionStorage`. The payload is a versioned envelope
-(`PersistedResumeSession`, `frontend/src/session/resumeSessionTypes.ts`):
+(`PersistedResumeSession`, `frontend/src/session/resumeSessionTypes.ts`) —
+abbreviated below; see `RESUME_SESSION_VERSION` in that module for the
+exact, current shape and the running history of why each bump happened:
 
 ```json
 {
-  "version": 1,
+  "version": 5,
   "resume": { "text": "...", "fileName": "resume.pdf" },
   "jobDescription": { "text": "...", "fileName": null },
   "resumeAnalysis": { "...": "the full analysis result" },
   "status": "success",
-  "activeCareerConversationSessionId": "a1b2c3..."
+  "activeCareerConversationSessionId": "a1b2c3...",
+  "careerConversationStatus": "complete",
+  "tailoringPlan": { "...": "the generated suggestion plan, or null" },
+  "finalTailoredResume": { "...": "or null" },
+  "postApplyComparison": { "...": "or null" },
+  "jobPreparationId": "d4e5f6..."
 }
 ```
+
+Every field above is versioned as one unit — a session persisted by a prior
+build that's missing a field this version expects fails
+`isSupportedPersistedSession` and is discarded wholesale (treated as no
+session at all), never partially rehydrated into a shape this version
+doesn't expect.
 
 Deliberately **not** persisted: `status: 'loading'` (an in-flight request
 can't still be in flight after a reload — normalized to `'idle'` before
@@ -143,6 +173,39 @@ This runs exactly once per page load — gated by both `hydrationStatus` and
 a `hasInitializedRef` guard, the same one-shot pattern already used
 elsewhere in this codebase to survive React 18 StrictMode's dev-only double
 effect invocation without firing a duplicate request.
+
+## A new analysis resets downstream state
+
+**The bug**: `POST /v1/analyze` always creates a brand-new, unrelated
+`JobPreparation` on the backend (see `start_job_preparation`'s own
+docstring — "every unrelated new uploaded resume is a new Resume" is a
+product rule, not an implementation detail). But `DashboardPage.handleAnalyze`
+used to only set `resumeAnalysis`/`jobPreparationId`/`status` on a
+successful analysis — every other field this session owns (Career
+Conversation id/status, tailoring plan/selections, final tailored resume,
+post-apply comparison) was left exactly as it was from whatever the
+*previous* analysis had left behind. Sidebar's `CandidateSummaryCard`
+reads `postApplyComparison?.score_after ?? resumeAnalysis.overall_assessment.overall_score`
+— so a candidate who analyzed one resume/job, applied and re-analyzed it,
+then later analyzed a completely different resume/job in the same tab
+would see the Sidebar keep showing the *first* job's post-apply score,
+not the new analysis's own score, until they happened to apply and
+re-analyze the new one too. Confirmed live via a screenshot: History
+correctly showed a freshly analyzed 85%-match preparation, while the
+Sidebar simultaneously showed 28% "Updated after tailoring & re-analysis"
+— the leftover result of a completely different, earlier preparation.
+
+**The fix**: `ResumeSessionContext` exposes `resetForNewAnalysis()`, which
+clears every field scoped to "the previous preparation" — Career
+Conversation, tailoring, and post-apply state — without touching
+`resume`/`jobDescription`/`resumeAnalysis`/`status`/`jobPreparationId`
+themselves (those five are what `handleAnalyze` sets to the *new*
+analysis's own values immediately afterward). `DashboardPage.handleAnalyze`
+calls it right after a successful `analyzeResume()`, before recording the
+new result. This is the same "a fresh X invalidates the old Y" pattern
+`TailoredResumePage.generate()` already applies to the post-apply subset
+whenever a *new tailoring plan* is generated — `resetForNewAnalysis`
+applies it one layer up, at the point a *new preparation* begins.
 
 ## Tradeoffs
 

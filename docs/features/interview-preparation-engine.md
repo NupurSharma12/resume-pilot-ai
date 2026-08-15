@@ -1,6 +1,8 @@
 # Interview Preparation Engine
 
-**Status:** Planned
+**Status:** Partially implemented (v1) — see "Implementation status (v1)" below.
+Everything past that section is the original, still-aspirational vision this
+v1 was deliberately scoped down from; it has not been rebuilt or replaced.
 
 **Owner:** ResumePilotAI
 
@@ -8,6 +10,69 @@
 - Resume Analysis Engine
 - Career Conversation Engine
 - Tailoring Engine
+
+---
+
+# Implementation status (v1)
+
+What's actually shipped today, intentionally much smaller than the "AI
+Skills"/"Long-Term Vision" sections below:
+
+- **Persistence**: one JSONB column, `job_preparations.interview_preparation`
+  — no new table, no new checkpoint timestamp. Belongs to the same
+  `job_preparation_id` throughout its lifecycle.
+- **Domain model** (`src/app/models/interview_preparation.py`):
+  `InterviewPreparationResult` — `system_design_questions`,
+  `coding_questions`, `behavioral_questions` (each `BehavioralQuestion`
+  tagged `career_conversation` or `suggested`, per `BehavioralQuestionSource`),
+  `generated_at`, and `stage` (`InterviewPreparationStage`).
+- **Three-stage lifecycle**, one API endpoint
+  (`POST /v1/job-preparations/{id}/interview-preparation`,
+  `src/app/api/v1/endpoints/interview_preparation.py`) that inspects what's
+  already persisted and performs exactly the incremental work newly
+  justified — never a blind full regeneration:
+  1. `initial` — resume + job description alone, available immediately
+     after Resume Analysis. One LLM call
+     (`InterviewPreparationWorkflow.generate`).
+  2. `career_conversation_enriched` — once the Career Conversation
+     completes, behavioral questions are re-derived deterministically from
+     the transcript (**zero LLM calls** —
+     `InterviewPreparationWorkflow.enrich_with_career_conversation`), while
+     `system_design_questions`/`coding_questions` are carried over
+     unchanged.
+  3. `tailoring_aligned` — once a tailored resume is applied, one LLM call
+     scoped to technical questions only
+     (`InterviewPreparationWorkflow.enrich_with_tailoring`, structured
+     output `GeneratedTechnicalPreparation`), grounded in the applied
+     resume plus a digest of the selected tailoring suggestions'
+     `reason` text. `behavioral_questions` is carried over unchanged.
+- **Generation is never automatic** — no LLM call fires as a side effect of
+  Resume Analysis, Career Conversation, or Apply completing; a user must
+  explicitly click "Generate"/"Update Interview Preparation."
+- **Frontend**: reachable two ways, both reading/writing the same
+  persisted guide via the same two existing endpoints (`GET
+  /v1/job-preparations/{id}`, the `POST` above) — no interview-preparation-
+  specific state lives in `ResumeSessionContext`:
+  - `InterviewPreparationPage` (`/interview-preparation`), reachable from
+    the Sidebar as soon as `resumeAnalysis` exists (same gating as
+    Tailored Resume) — the *active* preparation, keyed by the session's
+    current `jobPreparationId`.
+  - History's own Interview Preparation card, for inspecting a *past*
+    preparation.
+  - Both render through one shared component,
+    `frontend/src/components/InterviewPreparationCard.tsx`, including a
+    maturity badge ("Initial preparation" / "Updated from Career
+    Conversation" / "Aligned with your tailored resume") driven by
+    `stage` (`frontend/src/lib/interviewPreparationStage.ts`).
+
+Deliberately not built in v1 (all still true of everything below this
+section): Interview Blueprint, Coding Preparation Planner as a distinct
+skill, System Design Planner as a distinct skill, Project Deep Dive
+Generator, Weakness Detector, Preparation Roadmap, Mock Interview Agent,
+company-specific behavior, round-count prediction. What v1 calls "system
+design" and "coding" questions are the closest existing equivalents to
+Skills 4–5 below, generated as part of the same one/zero-call state
+machine above, not as independent skills.
 
 ---
 

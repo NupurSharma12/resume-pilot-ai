@@ -63,6 +63,7 @@ function makeResumeSessionValue(
     setPostApplyAnalysisStatus: vi.fn(),
     jobPreparationId: 'job-prep-1',
     setJobPreparationId: vi.fn(),
+    resetForNewAnalysis: vi.fn(),
     clearSession: vi.fn(),
     ...overrides,
   }

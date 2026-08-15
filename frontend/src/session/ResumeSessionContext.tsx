@@ -94,6 +94,21 @@ export interface ResumeSessionContextValue {
   jobPreparationId: string | null
   setJobPreparationId: (id: string | null) => void
 
+  // Clears every piece of state scoped to the *previous* analysis's
+  // JobPreparation -- Career Conversation, tailoring, and post-apply
+  // state -- without touching `resume`/`jobDescription`/`resumeAnalysis`/
+  // `status`/`jobPreparationId` themselves. Callers (today, only
+  // `DashboardPage.handleAnalyze`) call this immediately before setting
+  // those five to the *new* analysis's own values, since a fresh
+  // `POST /v1/analyze` always creates a brand-new, unrelated
+  // `JobPreparation` on the backend (see `start_job_preparation`'s own
+  // docstring: "every unrelated new uploaded resume is a new Resume" is
+  // a product rule) -- so anything still describing the old one (a
+  // Career Conversation session id, a generated tailoring plan, a final
+  // applied resume, a post-apply comparison) must not linger and leak
+  // into the new preparation's own UI. See docs/frontend/resume-session-state.md.
+  resetForNewAnalysis: () => void
+
   clearSession: () => void
 }
 
@@ -234,6 +249,23 @@ export function ResumeSessionProvider({
     storage,
   ])
 
+  function resetForNewAnalysis() {
+    setActiveCareerConversationSessionId(null)
+    setCareerConversationStatus(null)
+    setTailoringPlan(null)
+    setTailoringPlanStatus('idle')
+    setTailoringSelections([])
+    setTailoringCustomInstructions('')
+    setTailoringEditedTexts({})
+    setFinalTailoredResume(null)
+    setTailoringValidationReport(null)
+    setTailoringAvailableExportFormats([])
+    setTailoringSourceFormat(null)
+    setPostApplyAnalysis(null)
+    setPostApplyComparison(null)
+    setPostApplyAnalysisStatus('idle')
+  }
+
   function clearSession() {
     setResume(null)
     setJobDescription(null)
@@ -297,6 +329,7 @@ export function ResumeSessionProvider({
     setPostApplyAnalysisStatus,
     jobPreparationId,
     setJobPreparationId,
+    resetForNewAnalysis,
     clearSession,
   }
 

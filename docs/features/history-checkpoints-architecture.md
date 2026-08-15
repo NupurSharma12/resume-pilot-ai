@@ -2,7 +2,22 @@ ResumePilotAI — History Checkpoints & Simplified Persistence Design
 
 Status
 
-Decision stage — architecture agreed in principle, implementation not started.
+Implemented, substantially as designed below: five checkpoints (still four
+product-facing "phases" here plus the later-added Re-analysis checkpoint --
+see `app.persistence.models.JobPreparation`'s own docstring for why five,
+not four), backend endpoints (`GET /v1/job-preparations`,
+`GET /v1/job-preparations/{id}`), and `HistoryPage.tsx`. See
+`docs/persistent-backend-workflow-state.md`'s "What gets persisted, and
+where" table for the exact endpoint/boundary mapping actually shipped.
+
+Interview Preparation was added later, on top of this same
+`JobPreparation` record (`interview_preparation`, one more JSONB column,
+deliberately *not* a sixth checkpoint -- see
+`docs/features/interview-preparation-engine.md`). It is also reachable
+outside History now, from the active Job Preparation flow
+(`InterviewPreparationPage`, gated in the Sidebar the same way Tailored
+Resume is) -- History remains the place to inspect a *past* preparation's
+guide, read-only, through the same shared rendering component.
 
 History should preserve meaningful checkpoints in a user's preparation journey so that failures in LLM providers, network, quota, or browser sessions do not erase useful progress.
 
@@ -356,3 +371,4 @@ Then create:
 feat/job-preparation-checkpoints
 
 Claude should first review this document and the current schema/codebase, propose the exact schema/API delta, and only then implement after the proposal is reviewed.
+
