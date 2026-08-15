@@ -97,6 +97,13 @@ class JobPreparationDetailResponse(BaseModel):
     resume_name: str = Field(
         description="The candidate resume's human-readable label (see Resume.name)."
     )
+    resume_text: str = Field(
+        description=(
+            "The source resume version's full text (see JobPreparation."
+            "source_resume_version_id) -- needed to rehydrate an active session from History, "
+            "not merely to display a label."
+        )
+    )
     status: str = Field(description="Current lifecycle state (draft/active/completed).")
     created_at: datetime = Field(description="When this preparation was created.")
     updated_at: datetime = Field(description="When this preparation was last updated.")

@@ -61,6 +61,7 @@ function makeResumeSessionValue(
     jobPreparationId: null,
     setJobPreparationId: vi.fn(),
     resetForNewAnalysis: vi.fn(),
+    rehydrateFromHistory: vi.fn(),
     clearSession: vi.fn(),
     ...overrides,
   }

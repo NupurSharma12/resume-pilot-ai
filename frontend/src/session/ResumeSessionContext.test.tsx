@@ -1,8 +1,10 @@
+import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, act } from '@testing-library/react'
 import { ResumeSessionProvider, useResumeSession } from './ResumeSessionContext'
 import type { PersistedResumeSession, ResumeSessionStorage } from './resumeSessionTypes'
 import type { ResumeAnalysisComparison } from '../data/postApplyTypes'
+import type { JobPreparationDetail } from '../data/jobPreparationHistoryTypes'
 import {
   fixtureApplySuggestionsResponse,
   fixtureGenerateSuggestionsResponse,
@@ -10,6 +12,31 @@ import {
   fixtureResume,
   fixtureResumeAnalysis,
 } from '../testFixtures'
+
+const fixtureJobPreparationDetail: JobPreparationDetail = {
+  id: 'history-job-prep',
+  job_title: 'Staff Engineer',
+  company: 'Globex',
+  job_description: 'We are hiring a staff engineer.',
+  resume_name: 'Staff Engineer Resume',
+  resume_text: 'SUMMARY\nStaff engineer with 10 years of experience.',
+  status: 'active',
+  created_at: '2026-08-01T09:00:00Z',
+  updated_at: '2026-08-12T09:00:00Z',
+  checkpoints: {
+    initial_analysis_completed_at: '2026-08-01T10:00:00Z',
+    career_conversation_completed_at: '2026-08-01T10:05:00Z',
+    tailoring_plan_completed_at: null,
+    applied_at: null,
+    post_apply_analysis_completed_at: null,
+  },
+  analysis_result: fixtureResumeAnalysis as unknown as Record<string, unknown>,
+  career_conversation: { session_id: 'history-conv-1', status: 'complete', history: [] },
+  tailoring_plan: null,
+  applied_resume_text: null,
+  post_apply_analysis: null,
+  interview_preparation: null,
+}
 
 const fixturePostApplyComparison: ResumeAnalysisComparison = {
   score_before: fixtureResumeAnalysis.overall_assessment.overall_score,
@@ -44,10 +71,13 @@ function createFakeStorage(initial: PersistedResumeSession | null = null): Resum
 
 function Probe() {
   const session = useResumeSession()
+  const [nextRoute, setNextRoute] = useState<string | null>(null)
   return (
     <div>
       <span data-testid="hydration">{session.hydrationStatus}</span>
       <span data-testid="resume">{session.resume?.fileName ?? 'none'}</span>
+      <span data-testid="jobDescription">{session.jobDescription?.text ?? 'none'}</span>
+      <span data-testid="nextRoute">{nextRoute ?? 'none'}</span>
       <span data-testid="status">{session.status}</span>
       <span data-testid="sessionId">{session.activeCareerConversationSessionId ?? 'none'}</span>
       <span data-testid="conversationStatus">{session.careerConversationStatus ?? 'none'}</span>
@@ -71,6 +101,11 @@ function Probe() {
         set-post-apply-comparison
       </button>
       <button onClick={() => session.resetForNewAnalysis()}>reset-for-new-analysis</button>
+      <button
+        onClick={() => setNextRoute(session.rehydrateFromHistory(fixtureJobPreparationDetail))}
+      >
+        rehydrate-from-history
+      </button>
       <button onClick={() => session.setStatus('loading')}>set-loading</button>
       <button onClick={() => session.setActiveCareerConversationSessionId('conv-1')}>
         set-session-id
@@ -338,6 +373,37 @@ describe('ResumeSessionProvider', () => {
         appliedSuggestionIds: fixtureApplySuggestionsResponse.applied_suggestion_ids,
       })
     })
+  })
+
+  it('rehydrateFromHistory populates session fields from a JobPreparationDetail and returns the next route', async () => {
+    const storage = createFakeStorage(null)
+    render(
+      <ResumeSessionProvider storage={storage}>
+        <Probe />
+      </ResumeSessionProvider>,
+    )
+    await waitFor(() => expect(screen.getByTestId('hydration').textContent).toBe('hydrated'))
+
+    await act(async () => {
+      screen.getByText('rehydrate-from-history').click()
+    })
+
+    expect(screen.getByTestId('resume').textContent).toBe('Staff Engineer Resume')
+    expect(screen.getByTestId('jobDescription').textContent).toBe(
+      'We are hiring a staff engineer.',
+    )
+    expect(screen.getByTestId('resumeAnalysis').textContent).toBe('present')
+    expect(screen.getByTestId('jobPreparationId').textContent).toBe('history-job-prep')
+    expect(screen.getByTestId('sessionId').textContent).toBe('history-conv-1')
+    expect(screen.getByTestId('conversationStatus').textContent).toBe('complete')
+    expect(screen.getByTestId('status').textContent).toBe('success')
+    // No tailoring plan was persisted for this fixture's checkpoint state.
+    expect(screen.getByTestId('tailoringPlan').textContent).toBe('none')
+    expect(screen.getByTestId('finalResume').textContent).toBe('none')
+    expect(screen.getByTestId('postApplyComparison').textContent).toBe('none')
+    // Career Conversation is complete but Tailoring Plan is not -- Continue
+    // should land on Tailored Resume next (see nextRouteForCheckpoints).
+    expect(screen.getByTestId('nextRoute').textContent).toBe('/tailored-resume')
   })
 
   it('throws a clear error if useResumeSession is used outside the provider', () => {

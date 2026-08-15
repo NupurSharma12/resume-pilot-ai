@@ -7,7 +7,12 @@ interface TailoringFinalResumeCardProps {
   finalResumeText: string
   appliedSuggestionIds: string[]
   allSuggestions: TailoringSuggestion[]
-  validationReport: FinalValidationReport
+  // Null after rehydrating a past preparation from History: `/apply`'s
+  // validation report was never part of the durable `JobPreparation`
+  // record (only its live response carried it) -- see
+  // rehydrateFromJobPreparation.ts's docstring. The section below simply
+  // doesn't render in that case, rather than fabricating a report.
+  validationReport: FinalValidationReport | null
   // Same precomputed maps TailoredResumePage builds once for the whole
   // suggestion list (see suggestionPresentation.ts) -- passed in rather
   // than recomputed here, and never the raw `target_section_id`.
@@ -60,23 +65,27 @@ export default function TailoringFinalResumeCard({
         </pre>
       </div>
 
-      <div className="rounded-2xl border border-gray-200 bg-white p-6">
-        <div className="flex items-center justify-between gap-4">
-          <h3 className="font-semibold text-gray-900">Final Validation</h3>
-          <Badge variant={validationReport.is_valid ? 'green' : 'amber'}>
-            {validationReport.is_valid ? 'No issues found' : `${validationReport.messages.length} issue(s)`}
-          </Badge>
+      {validationReport && (
+        <div className="rounded-2xl border border-gray-200 bg-white p-6">
+          <div className="flex items-center justify-between gap-4">
+            <h3 className="font-semibold text-gray-900">Final Validation</h3>
+            <Badge variant={validationReport.is_valid ? 'green' : 'amber'}>
+              {validationReport.is_valid
+                ? 'No issues found'
+                : `${validationReport.messages.length} issue(s)`}
+            </Badge>
+          </div>
+          {validationReport.messages.length > 0 && (
+            <ul className="mt-3 space-y-1.5">
+              {validationReport.messages.map((message, index) => (
+                <li key={index} className="text-sm text-amber-700">
+                  {message}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
-        {validationReport.messages.length > 0 && (
-          <ul className="mt-3 space-y-1.5">
-            {validationReport.messages.map((message, index) => (
-              <li key={index} className="text-sm text-amber-700">
-                {message}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+      )}
 
       <div className="rounded-2xl border border-gray-200 bg-white p-6">
         <h3 className="font-semibold text-gray-900">Applied changes ({applied.length})</h3>

@@ -79,6 +79,7 @@ export interface JobPreparationDetail {
   company: string | null
   job_description: string
   resume_name: string
+  resume_text: string
   status: string
   created_at: string
   updated_at: string

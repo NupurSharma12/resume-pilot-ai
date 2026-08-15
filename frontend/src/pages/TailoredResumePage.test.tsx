@@ -6,6 +6,7 @@ import TailoredResumePage from './TailoredResumePage'
 import * as careerConversationApi from '../lib/careerConversationApi'
 import * as tailoringSuggestionsApi from '../lib/tailoringSuggestionsApi'
 import * as postApplyApi from '../lib/postApplyApi'
+import * as jobPreparationHistoryApi from '../lib/jobPreparationHistoryApi'
 import * as resumeSessionContext from '../session/ResumeSessionContext'
 import { ResumeSessionProvider } from '../session/ResumeSessionContext'
 import { ApiError } from '../lib/api'
@@ -27,6 +28,7 @@ import type { PersistedResumeSession, ResumeSessionStorage } from '../session/re
 vi.mock('../lib/careerConversationApi')
 vi.mock('../lib/tailoringSuggestionsApi')
 vi.mock('../lib/postApplyApi')
+vi.mock('../lib/jobPreparationHistoryApi')
 vi.mock('../session/ResumeSessionContext', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../session/ResumeSessionContext')>()
   // Defaults to the *real* hook (reading from the real `ResumeSessionProvider`),
@@ -40,6 +42,7 @@ vi.mock('../session/ResumeSessionContext', async (importOriginal) => {
 const mockedCareerConversationApi = vi.mocked(careerConversationApi)
 const mockedTailoringApi = vi.mocked(tailoringSuggestionsApi)
 const mockedPostApplyApi = vi.mocked(postApplyApi)
+const mockedJobPreparationHistoryApi = vi.mocked(jobPreparationHistoryApi)
 const mockedUseResumeSession = vi.mocked(resumeSessionContext.useResumeSession)
 
 function makeResumeSessionValue(
@@ -86,6 +89,7 @@ function makeResumeSessionValue(
     jobPreparationId: null,
     setJobPreparationId: vi.fn(),
     resetForNewAnalysis: vi.fn(),
+    rehydrateFromHistory: vi.fn(),
     clearSession: vi.fn(),
     ...overrides,
   }
@@ -376,6 +380,60 @@ describe('TailoredResumePage: generating suggestions', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: /try again/i }))
 
+    await waitFor(() =>
+      expect(screen.getByText(fixtureSuggestionAppend.reason)).toBeInTheDocument(),
+    )
+  })
+
+  it('falls back to the persisted career conversation transcript when the live session is gone (e.g. after a backend restart or a History rehydration)', async () => {
+    mockedCareerConversationApi.getCareerConversation.mockRejectedValue(
+      new ApiError('This conversation session no longer exists.', { cause: 'not_found' }),
+    )
+    mockedJobPreparationHistoryApi.getJobPreparation.mockResolvedValue({
+      id: 'job-prep-1',
+      job_title: 'Senior Engineer',
+      company: null,
+      job_description: fixtureJobDescription.text,
+      resume_name: 'Senior Engineer Resume',
+      resume_text: fixtureResume.text,
+      status: 'active',
+      created_at: '2026-08-01T09:00:00Z',
+      updated_at: '2026-08-01T09:00:00Z',
+      checkpoints: {
+        initial_analysis_completed_at: '2026-08-01T09:00:00Z',
+        career_conversation_completed_at: '2026-08-01T09:05:00Z',
+        tailoring_plan_completed_at: null,
+        applied_at: null,
+        post_apply_analysis_completed_at: null,
+      },
+      analysis_result: fixtureResumeAnalysis as unknown as Record<string, unknown>,
+      career_conversation: fixtureCompletedSession as unknown as Record<string, unknown>,
+      tailoring_plan: null,
+      applied_resume_text: null,
+      post_apply_analysis: null,
+      interview_preparation: null,
+    })
+    mockedTailoringApi.generateTailoringSuggestions.mockResolvedValue(
+      fixtureGenerateSuggestionsResponse,
+    )
+
+    renderPageWithRealSession({ jobPreparationId: 'job-prep-1' })
+    fireEvent.click(screen.getByRole('button', { name: /generate tailoring plan/i }))
+
+    await waitFor(() =>
+      expect(mockedJobPreparationHistoryApi.getJobPreparation).toHaveBeenCalledWith('job-prep-1'),
+    )
+    await waitFor(() =>
+      expect(mockedTailoringApi.generateTailoringSuggestions).toHaveBeenCalledWith(
+        fixtureResume.text,
+        fixtureJobDescription.text,
+        fixtureResumeAnalysis,
+        fixtureCompletedSession,
+        '',
+        fixtureResume.fileName,
+        'job-prep-1',
+      ),
+    )
     await waitFor(() =>
       expect(screen.getByText(fixtureSuggestionAppend.reason)).toBeInTheDocument(),
     )

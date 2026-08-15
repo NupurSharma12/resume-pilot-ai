@@ -161,7 +161,7 @@ test.describe('History screen', () => {
   test('shows partial checkpoint progress honestly in both the list and the opened preparation, and survives a reload', async ({
     page,
   }) => {
-    await page.route('**/v1/job-preparations', async (route) => {
+    await page.route('**/v1/job-preparations*', async (route) => {
       await route.fulfill({ json: { items: [partialSummary] } })
     })
     await page.route(`**/v1/job-preparations/${JOB_PREPARATION_ID}`, async (route) => {
@@ -188,7 +188,7 @@ test.describe('History screen', () => {
     await expect(main.getByText('Tailored Resume')).toBeVisible()
     await expect(main.getByText('Re-analysis')).toBeVisible()
 
-    await main.getByText('Senior Full-Stack Engineer').click()
+    await main.getByRole('button', { name: 'View Preparation' }).click()
 
     await expect(main.getByText('78%')).toBeVisible()
     await expect(main.getByText('Strong backend foundation.')).toBeVisible()
@@ -205,7 +205,7 @@ test.describe('History screen', () => {
     // the reload because it was never client-side to begin with.
     await page.reload()
     await expect(main.getByText('Senior Full-Stack Engineer')).toBeVisible()
-    await main.getByText('Senior Full-Stack Engineer').click()
+    await main.getByRole('button', { name: 'View Preparation' }).click()
     await expect(main.getByText('78%')).toBeVisible()
     await expect(main.getByText('Strong backend foundation.')).toBeVisible()
   })
@@ -213,7 +213,7 @@ test.describe('History screen', () => {
   test('generates and displays an Interview Preparation guide, deterministically mocked', async ({
     page,
   }) => {
-    await page.route('**/v1/job-preparations', async (route) => {
+    await page.route('**/v1/job-preparations*', async (route) => {
       await route.fulfill({ json: { items: [partialSummary] } })
     })
     await page.route(`**/v1/job-preparations/${JOB_PREPARATION_ID}`, async (route) => {
@@ -231,7 +231,7 @@ test.describe('History screen', () => {
     await expect(page).toHaveURL(/\/history$/)
 
     const main = page.locator('main')
-    await main.getByText('Senior Full-Stack Engineer').click()
+    await main.getByRole('button', { name: 'View Preparation' }).click()
 
     await expect(main.getByText(/no interview preparation guide yet/i)).toBeVisible()
     await main.getByRole('button', { name: 'Generate Interview Preparation' }).click()
@@ -245,7 +245,7 @@ test.describe('History screen', () => {
   })
 
   test('shows an empty state when there is no history yet', async ({ page }) => {
-    await page.route('**/v1/job-preparations', async (route) => {
+    await page.route('**/v1/job-preparations*', async (route) => {
       await route.fulfill({ json: { items: [] } })
     })
 
