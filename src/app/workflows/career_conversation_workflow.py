@@ -67,6 +67,16 @@ MAX_CONVERSATION_TURNS = 8
 # the LLM's own `should_stop` signal, not a replacement for it.
 STOP_CONFIDENCE_THRESHOLD = 90
 
+# How many times `_request_decision` will ask the gateway for a decision
+# before giving up on a should_stop/question invariant violation (see
+# `ConversationTurnInconsistentError`). A schema-invalid response is
+# already retried across providers/models inside the gateway chain
+# itself; this is a *separate*, smaller retry for a response that passed
+# schema validation but broke this workflow's own cross-field contract --
+# see `_request_decision`'s docstring for why one extra attempt lives
+# here rather than nowhere.
+MAX_DECISION_ATTEMPTS = 2
+
 
 class ConversationTurnInconsistentError(RuntimeError):
     """Raised when a `ConversationTurnDecision` violates the should_stop/question invariant.
@@ -190,6 +200,20 @@ class CareerConversationWorkflow:
         itself raises on a provider failure (e.g.
         `GatewayChainExhaustedError`) — all before touching `session`.
 
+        A schema-invalid response is already retried across
+        providers/models inside the gateway chain itself (see
+        `GatewayChain`/`OpenRouterGateway`). A response that instead
+        violates the should_stop/question invariant passes schema
+        validation cleanly, so the chain sees it as a success and never
+        retries it — this method retries that specific failure itself,
+        up to `MAX_DECISION_ATTEMPTS` times, re-entering
+        `self._gateway.generate_structured` from the top each time rather
+        than pinning to whichever provider/model served the last attempt
+        (this workflow has no visibility into that, by design — see the
+        class docstring). The same already-built `request` is reused for
+        every attempt: nothing about the prompt's inputs changes between
+        attempts, since `session` is never mutated here.
+
         No prompt text, resume/job-description content, question text, or
         answer text is ever logged — only `session_id`, elapsed time, and
         the error message on failure (a short, provider-agnostic
@@ -218,19 +242,36 @@ class CareerConversationWorkflow:
             resume_analysis=session.resume_analysis,
             history=history,
         )
-        try:
-            decision = await self._gateway.generate_structured(request, ConversationTurnDecision)
-        except ValidationError as exc:
-            logger.error(
-                "career_conversation_turn_validation_failed",
-                session_id=session.session_id,
-                elapsed_ms=(time.perf_counter() - start) * 1000,
-                error=str(exc),
-            )
-            raise
 
-        self._validate_decision(decision)
-        return decision
+        for attempt in range(1, MAX_DECISION_ATTEMPTS + 1):
+            try:
+                decision = await self._gateway.generate_structured(
+                    request, ConversationTurnDecision
+                )
+            except ValidationError as exc:
+                logger.error(
+                    "career_conversation_turn_validation_failed",
+                    session_id=session.session_id,
+                    elapsed_ms=(time.perf_counter() - start) * 1000,
+                    error=str(exc),
+                )
+                raise
+
+            try:
+                self._validate_decision(decision)
+            except ConversationTurnInconsistentError as exc:
+                logger.info(
+                    "career_conversation_decision_invalid",
+                    session_id=session.session_id,
+                    attempt=attempt,
+                    reason=str(exc),
+                    elapsed_ms=(time.perf_counter() - start) * 1000,
+                )
+                if attempt == MAX_DECISION_ATTEMPTS:
+                    raise
+                continue
+
+            return decision
 
     @staticmethod
     def _apply_decision(session: ConversationSession, decision: ConversationTurnDecision) -> None:

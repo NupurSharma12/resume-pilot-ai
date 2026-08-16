@@ -26,6 +26,7 @@ from app.prompts.career_conversation_prompt_builder import CareerConversationPro
 from app.sessions.conversation_session import ConversationSession
 from app.workflows.career_conversation_workflow import (
     MAX_CONVERSATION_TURNS,
+    MAX_DECISION_ATTEMPTS,
     STOP_CONFIDENCE_THRESHOLD,
     CareerConversationWorkflow,
     ConversationTurnInconsistentError,
@@ -82,6 +83,25 @@ class FakeGateway:
     async def stream(self, request: LLMRequest) -> AsyncIterator[str]:
         raise NotImplementedError("Unused by CareerConversationWorkflow.")
         yield  # pragma: no cover - makes this an async generator
+
+
+class _CountingPromptBuilder:
+    """Wraps the real prompt builder, counting `.build` calls.
+
+    Lets tests assert that `_request_decision` builds its prompt/request
+    exactly once per call, even when it retries `generate_structured`
+    across multiple attempts (see `MAX_DECISION_ATTEMPTS`) -- the same
+    already-built request must be reused for every attempt, never
+    rebuilt.
+    """
+
+    def __init__(self) -> None:
+        self._inner = CareerConversationPromptBuilder()
+        self.build_call_count = 0
+
+    def build(self, **kwargs: object) -> LLMRequest:
+        self.build_call_count += 1
+        return self._inner.build(**kwargs)  # type: ignore[arg-type]
 
 
 def _continue_decision(
@@ -245,30 +265,78 @@ async def test_high_confidence_forces_stop_even_if_llm_did_not_flag_it(
     assert str(STOP_CONFIDENCE_THRESHOLD) in (session.stop_reason or "")
 
 
-async def test_should_stop_true_with_question_raises(resume_analysis: ResumeAnalysisResult) -> None:
+async def test_should_stop_true_with_question_raises_after_exhausting_retries(
+    resume_analysis: ResumeAnalysisResult,
+) -> None:
+    """Both attempts return the same invariant-violating decision -- `MAX_DECISION_ATTEMPTS`
+    retries a should_stop/question contract violation exactly like a single-attempt failure
+    used to, just with `MAX_DECISION_ATTEMPTS` gateway calls instead of one.
+    """
     bad_decision = ConversationTurnDecision(
         confidence=80,
         should_stop=True,
         question="This should not be present.",
     )
-    gateway = FakeGateway([bad_decision])
+    gateway = FakeGateway([bad_decision] * MAX_DECISION_ATTEMPTS)
     workflow = CareerConversationWorkflow(CareerConversationPromptBuilder(), gateway)
     session = _new_session(resume_analysis)
 
     with pytest.raises(ConversationTurnInconsistentError):
         await workflow.start_conversation(session)
 
+    assert gateway.call_count == MAX_DECISION_ATTEMPTS
 
-async def test_should_stop_false_with_missing_fields_raises(
+
+async def test_should_stop_false_with_missing_fields_raises_after_exhausting_retries(
     resume_analysis: ResumeAnalysisResult,
 ) -> None:
     bad_decision = ConversationTurnDecision(confidence=40, should_stop=False)
-    gateway = FakeGateway([bad_decision])
+    gateway = FakeGateway([bad_decision] * MAX_DECISION_ATTEMPTS)
     workflow = CareerConversationWorkflow(CareerConversationPromptBuilder(), gateway)
     session = _new_session(resume_analysis)
 
     with pytest.raises(ConversationTurnInconsistentError):
         await workflow.start_conversation(session)
+
+    # Exactly two gateway calls -- one per configured attempt, no more.
+    assert gateway.call_count == MAX_DECISION_ATTEMPTS
+
+
+async def test_first_attempt_inconsistent_second_attempt_succeeds(
+    resume_analysis: ResumeAnalysisResult,
+) -> None:
+    """A should_stop/question invariant violation on the first attempt is retried
+    transparently -- the caller only ever sees the eventual successful decision.
+    """
+    bad_decision = ConversationTurnDecision(confidence=40, should_stop=False)
+    good_decision = _continue_decision(confidence=30)
+    gateway = FakeGateway([bad_decision, good_decision])
+    workflow = CareerConversationWorkflow(CareerConversationPromptBuilder(), gateway)
+    session = _new_session(resume_analysis)
+
+    await workflow.start_conversation(session)
+
+    assert gateway.call_count == 2
+    assert session.current_question is not None
+    assert session.current_question.topic == good_decision.topic
+    assert session.last_confidence == 30
+    assert session.status.value == "in_progress"
+
+
+async def test_prompt_is_built_only_once_across_retries(
+    resume_analysis: ResumeAnalysisResult,
+) -> None:
+    bad_decision = ConversationTurnDecision(confidence=40, should_stop=False)
+    good_decision = _continue_decision(confidence=30)
+    gateway = FakeGateway([bad_decision, good_decision])
+    prompt_builder = _CountingPromptBuilder()
+    workflow = CareerConversationWorkflow(prompt_builder, gateway)  # type: ignore[arg-type]
+    session = _new_session(resume_analysis)
+
+    await workflow.start_conversation(session)
+
+    assert gateway.call_count == 2
+    assert prompt_builder.build_call_count == 1
 
 
 async def test_hard_stop_at_max_turns_without_extra_gateway_call(
@@ -310,10 +378,16 @@ async def test_hard_stop_at_max_turns_without_extra_gateway_call(
 async def test_submit_answer_preserves_session_when_next_turn_decision_is_inconsistent(
     resume_analysis: ResumeAnalysisResult,
 ) -> None:
+    """Session stays unchanged when *both* retry attempts return an inconsistent decision --
+    the in-workflow retry (`MAX_DECISION_ATTEMPTS`) is exhausted entirely before
+    `_request_decision` raises, and nothing about that retrying touches `session`.
+    """
     bad_decision = ConversationTurnDecision(
         confidence=40, should_stop=False
     )  # missing next-turn fields
-    gateway = FakeGateway([_continue_decision(confidence=30), bad_decision])
+    gateway = FakeGateway(
+        [_continue_decision(confidence=30), *([bad_decision] * MAX_DECISION_ATTEMPTS)]
+    )
     workflow = CareerConversationWorkflow(CareerConversationPromptBuilder(), gateway)
     session = _new_session(resume_analysis)
     await workflow.start_conversation(session)
@@ -328,6 +402,8 @@ async def test_submit_answer_preserves_session_when_next_turn_decision_is_incons
     assert session.history == []
     assert session.status.value == "in_progress"
     assert session.turn_count == 0
+    # One call for `start_conversation` plus one per exhausted retry attempt.
+    assert gateway.call_count == 1 + MAX_DECISION_ATTEMPTS
 
 
 async def test_submit_answer_preserves_session_when_gateway_fails(
