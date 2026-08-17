@@ -120,7 +120,7 @@ class GatewayChain(LLMGateway):
         and `gateway_chain_failed`, which are ERROR): `gateway_attempt_
         started`, `gateway_attempt_succeeded`, `gateway_attempt_failed_
         transient`, `gateway_attempt_failed_permanent` (each carrying
-        `provider`/`attempt`/`method`, plus `elapsed_ms` once the call has
+        `provider`/`attempt`/`operation`, plus `elapsed_ms` once the call has
         returned, plus `error_type`/`error` on failure — `error` is
         `str(exc)` on a `TransientGatewayError`/`PermanentGatewayError`,
         which is always a short, provider-agnostic classification message
@@ -153,7 +153,7 @@ class GatewayChain(LLMGateway):
                 logger.info(
                     "gateway_chain_provider_skipped",
                     provider=gateway.provider_name,
-                    method=method_name,
+                    operation=method_name,
                     reason="does_not_support_structured_output",
                 )
                 continue
@@ -172,7 +172,7 @@ class GatewayChain(LLMGateway):
                 "gateway_attempt_started",
                 provider=gateway.provider_name,
                 attempt=attempt,
-                method=method_name,
+                operation=method_name,
             )
             start = time.perf_counter()
             try:
@@ -183,7 +183,7 @@ class GatewayChain(LLMGateway):
                     "gateway_attempt_failed_transient",
                     provider=gateway.provider_name,
                     attempt=attempt,
-                    method=method_name,
+                    operation=method_name,
                     elapsed_ms=elapsed_ms,
                     error_type=type(exc).__name__,
                     error=str(exc),
@@ -198,7 +198,7 @@ class GatewayChain(LLMGateway):
                     "gateway_attempt_failed_permanent",
                     provider=gateway.provider_name,
                     attempt=attempt,
-                    method=method_name,
+                    operation=method_name,
                     elapsed_ms=elapsed_ms,
                     error_type=type(exc).__name__,
                     error=str(exc),
@@ -210,12 +210,12 @@ class GatewayChain(LLMGateway):
                 "gateway_attempt_succeeded",
                 provider=gateway.provider_name,
                 attempt=attempt,
-                method=method_name,
+                operation=method_name,
                 elapsed_ms=elapsed_ms,
             )
             logger.info(
                 "gateway_chain_summary",
-                method=method_name,
+                operation=method_name,
                 providers_tried=providers_tried,
                 successful_provider=gateway.provider_name,
                 attempts=len(providers_tried),
@@ -226,7 +226,7 @@ class GatewayChain(LLMGateway):
 
         logger.error(
             "gateway_chain_failed",
-            method=method_name,
+            operation=method_name,
             providers_tried=providers_tried,
             attempts=len(providers_tried),
             fallback_count=fallback_count,
