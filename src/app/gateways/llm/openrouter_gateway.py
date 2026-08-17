@@ -150,7 +150,7 @@ class OpenRouterGateway(LLMGateway):
         async def attempt(model: str) -> LLMResponse:
             payload = self._build_payload(request, user_prompt=request.user_prompt, model=model)
             start = time.perf_counter()
-            data = await self._post(payload, model=model)
+            data = await self._post(payload, model=model, operation="generate")
             latency_ms = (time.perf_counter() - start) * 1000
 
             choice = self._first_choice(data, model=model)
@@ -195,8 +195,8 @@ class OpenRouterGateway(LLMGateway):
                 request, user_prompt=schema_instructions, model=model, json_mode=True
             )
             start = time.perf_counter()
-            data = await self._post(payload, model=model)
-            latency_ms = (time.perf_counter() - start) * 1000
+            data = await self._post(payload, model=model, operation="generate_structured")
+            elapsed_ms = (time.perf_counter() - start) * 1000
 
             choice = self._first_choice(data, model=model)
             content = self._require_content(choice, model=model)
@@ -214,8 +214,9 @@ class OpenRouterGateway(LLMGateway):
                 "openrouter_generate_structured",
                 provider="openrouter",
                 model=model,
+                operation="generate_structured",
                 response_model=response_model.__name__,
-                latency_ms=latency_ms,
+                elapsed_ms=elapsed_ms,
                 prompt_tokens=usage.prompt_tokens if usage else None,
                 completion_tokens=usage.completion_tokens if usage else None,
                 total_tokens=usage.total_tokens if usage else None,
@@ -266,7 +267,7 @@ class OpenRouterGateway(LLMGateway):
             models_tried.append(model)
             logger.info(
                 "openrouter_model_attempt_started",
-                method=method_name,
+                operation=method_name,
                 model=model,
                 attempt=attempt_number,
                 models_configured=len(self._models),
@@ -278,7 +279,7 @@ class OpenRouterGateway(LLMGateway):
                 elapsed_ms = (time.perf_counter() - start) * 1000
                 logger.info(
                     "openrouter_model_failed",
-                    method=method_name,
+                    operation=method_name,
                     model=model,
                     attempt=attempt_number,
                     elapsed_ms=elapsed_ms,
@@ -289,7 +290,7 @@ class OpenRouterGateway(LLMGateway):
                 if attempt_number < len(self._models):
                     logger.info(
                         "openrouter_model_fallback",
-                        method=method_name,
+                        operation=method_name,
                         from_model=model,
                         to_model=self._models[attempt_number],
                     )
@@ -299,14 +300,14 @@ class OpenRouterGateway(LLMGateway):
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.info(
                 "openrouter_model_succeeded",
-                method=method_name,
+                operation=method_name,
                 model=model,
                 attempt=attempt_number,
                 elapsed_ms=elapsed_ms,
             )
             logger.info(
                 "openrouter_model_chain_summary",
-                method=method_name,
+                operation=method_name,
                 models_tried=models_tried,
                 successful_model=model,
                 attempts=len(models_tried),
@@ -316,7 +317,7 @@ class OpenRouterGateway(LLMGateway):
 
         logger.error(
             "openrouter_model_chain_exhausted",
-            method=method_name,
+            operation=method_name,
             models_tried=models_tried,
             attempts=len(models_tried),
             total_elapsed_ms=(time.perf_counter() - chain_start) * 1000,
@@ -357,7 +358,7 @@ class OpenRouterGateway(LLMGateway):
             payload["response_format"] = {"type": "json_object"}
         return payload
 
-    async def _post(self, payload: dict[str, Any], *, model: str) -> dict[str, Any]:
+    async def _post(self, payload: dict[str, Any], *, model: str, operation: str) -> dict[str, Any]:
         """POST to `/chat/completions` for one model, classifying any failure.
 
         Network-level failures (`httpx.TimeoutException`/`NetworkError` —
@@ -384,7 +385,8 @@ class OpenRouterGateway(LLMGateway):
                 "openrouter_request_failed",
                 provider="openrouter",
                 model=model,
-                latency_ms=elapsed_ms,
+                operation=operation,
+                elapsed_ms=elapsed_ms,
                 error_type=type(exc).__name__,
                 retryable=True,
             )
@@ -399,7 +401,8 @@ class OpenRouterGateway(LLMGateway):
                     "openrouter_request_failed",
                     provider="openrouter",
                     model=model,
-                    latency_ms=elapsed_ms,
+                    operation=operation,
+                    elapsed_ms=elapsed_ms,
                     error_type=type(exc).__name__,
                     reason="malformed_json",
                     retryable=True,
@@ -413,7 +416,8 @@ class OpenRouterGateway(LLMGateway):
             "openrouter_request_failed",
             provider="openrouter",
             model=model,
-            latency_ms=elapsed_ms,
+            operation=operation,
+            elapsed_ms=elapsed_ms,
             status_code=response.status_code,
             retryable=isinstance(classified, TransientGatewayError),
         )

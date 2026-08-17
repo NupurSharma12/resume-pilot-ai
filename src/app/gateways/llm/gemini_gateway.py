@@ -187,7 +187,8 @@ class GeminiGateway(LLMGateway):
                 "gemini_generate_failed",
                 provider="gemini",
                 model=self._model,
-                latency_ms=(time.perf_counter() - start) * 1000,
+                operation="generate",
+                elapsed_ms=(time.perf_counter() - start) * 1000,
                 error_type=type(exc).__name__,
                 retryable=isinstance(classified, TransientGatewayError),
             )
@@ -248,7 +249,9 @@ class GeminiGateway(LLMGateway):
         `time.perf_counter()` placement around the network call — for
         instrumentation consistency, but since this method's return type
         is the caller's own `response_model` (not `LLMResponse`), there is
-        no `latency_ms` field to embed it in; it's logged instead via the
+        no response object field to embed it in; it's logged instead
+        (as `elapsed_ms`, matching every other LLM-layer event's field
+        name for this — see `GatewayChain`/`OpenRouterGateway`) via the
         module's structlog logger, along with `usage`/`finish_reason`
         extracted with the same `_extract_usage`/`_extract_finish_reason`
         helpers `generate()` already uses (for consistent field meaning
@@ -290,21 +293,23 @@ class GeminiGateway(LLMGateway):
                 "gemini_generate_structured_failed",
                 provider="gemini",
                 model=self._model,
+                operation="generate_structured",
                 response_model=response_model.__name__,
-                latency_ms=(time.perf_counter() - start) * 1000,
+                elapsed_ms=(time.perf_counter() - start) * 1000,
                 error_type=type(exc).__name__,
                 retryable=isinstance(classified, TransientGatewayError),
             )
             raise classified from exc
-        latency_ms = (time.perf_counter() - start) * 1000
+        elapsed_ms = (time.perf_counter() - start) * 1000
 
         usage = self._extract_usage(response)
         logger.info(
             "gemini_generate_structured",
             provider="gemini",
             model=self._model,
+            operation="generate_structured",
             response_model=response_model.__name__,
-            latency_ms=latency_ms,
+            elapsed_ms=elapsed_ms,
             prompt_tokens=usage.prompt_tokens if usage else None,
             completion_tokens=usage.completion_tokens if usage else None,
             total_tokens=usage.total_tokens if usage else None,

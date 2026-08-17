@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging, get_logger
+from app.core.request_context import RequestContextMiddleware
 from app.gateways.llm.factory import build_llm_gateway
 from app.persistence.factory import build_persistence_store
 from app.persistence.lifecycle import Disposable
@@ -86,8 +87,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # get `null` back from `response.headers.get(...)` for both,
         # silently breaking filename/fidelity parsing (see
         # `frontend/src/lib/tailoringSuggestionsApi.ts`).
-        expose_headers=["Content-Disposition", "X-Export-Fidelity"],
+        expose_headers=["Content-Disposition", "X-Export-Fidelity", "X-Request-ID"],
     )
+    # Added last so it's the outermost middleware layer (Starlette wraps
+    # each `add_middleware` call around the previous stack) -- every
+    # request, including CORS preflight, gets a request_id bound into
+    # structlog context before anything else runs, and it stays bound for
+    # everything that happens further in, including this CORS layer's own
+    # processing. See `RequestContextMiddleware`'s docstring for why an
+    # unexpected exception is only logged here, never swallowed or
+    # reshaped -- Starlette's own `ServerErrorMiddleware`, always outside
+    # every user middleware, still produces the existing default 500
+    # response untouched.
+    app.add_middleware(RequestContextMiddleware)
 
     app.include_router(api_router)
 
