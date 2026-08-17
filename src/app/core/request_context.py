@@ -33,6 +33,20 @@ Only request metadata is ever logged here: `method`, `path`,
 headers, query params, or body content, matching this codebase's
 existing no-content-logging policy (see `career_conversation_workflow`'s
 module docstring for the same policy applied to LLM calls).
+
+Phase 2 also records the HTTP request-count/duration metrics from
+`app.core.metrics` in this same method, rather than through a second
+middleware: both metrics and the existing logs need the exact same
+inputs (method, resolved route, status code, elapsed time), computed at
+the exact same two points (the success/`else` branch and the
+`except Exception` branch) -- a second `BaseHTTPMiddleware` wrapping
+every request again would duplicate that same timing/try-except
+scaffolding for no benefit, which is exactly what this module's
+docstring on reuse (and the observability design doc) argues against.
+`route`, not `path`, is what's recorded as a metric label -- see
+`app.core.metrics.route_label` for why (unbounded `path` values would be
+a cardinality hazard that `logger`'s `path` field, read freely by a
+human or a log query, never was).
 """
 
 import time
@@ -45,6 +59,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from app.core.logging import get_logger
+from app.core.metrics import record_http_request, route_label
 
 logger = get_logger(__name__)
 
@@ -81,23 +96,43 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except Exception as exc:
+            elapsed_seconds = time.perf_counter() - start
+            route = route_label(request)
             logger.error(
                 "request_failed",
                 request_id=request_id,
                 method=request.method,
                 path=request.url.path,
-                elapsed_ms=(time.perf_counter() - start) * 1000,
+                elapsed_ms=elapsed_seconds * 1000,
                 error_type=type(exc).__name__,
+            )
+            # No `response` object exists for an unhandled exception --
+            # "500" is recorded because that is exactly what Starlette's
+            # `ServerErrorMiddleware` (outside this middleware, untouched
+            # by it) is about to return; see this module's own docstring.
+            record_http_request(
+                method=request.method,
+                route=route,
+                status_code="500",
+                elapsed_seconds=elapsed_seconds,
             )
             raise
         else:
+            elapsed_seconds = time.perf_counter() - start
+            route = route_label(request)
             logger.info(
                 "request_completed",
                 request_id=request_id,
                 method=request.method,
                 path=request.url.path,
                 status_code=response.status_code,
-                elapsed_ms=(time.perf_counter() - start) * 1000,
+                elapsed_ms=elapsed_seconds * 1000,
+            )
+            record_http_request(
+                method=request.method,
+                route=route,
+                status_code=str(response.status_code),
+                elapsed_seconds=elapsed_seconds,
             )
             response.headers[REQUEST_ID_HEADER] = request_id
             return response

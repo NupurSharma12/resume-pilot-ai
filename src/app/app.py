@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging, get_logger
+from app.core.metrics import router as metrics_router
 from app.core.request_context import RequestContextMiddleware
 from app.gateways.llm.factory import build_llm_gateway
 from app.persistence.factory import build_persistence_store
@@ -101,6 +102,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # response untouched.
     app.add_middleware(RequestContextMiddleware)
 
+    # Unversioned and outside `api_router` deliberately -- see
+    # `app.core.metrics`'s own docstring for why `/metrics` stays off the
+    # `/v1` prefix every other route uses.
+    app.include_router(metrics_router)
     app.include_router(api_router)
 
     return app

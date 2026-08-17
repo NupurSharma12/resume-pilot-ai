@@ -18,6 +18,7 @@ from google.genai.errors import ClientError, ServerError
 
 from app.core.config import Settings
 from app.core.logging import get_logger
+from app.core.metrics import record_llm_request
 from app.gateways.llm.errors import GatewayError, PermanentGatewayError, TransientGatewayError
 from app.gateways.llm.gateway import LLMGateway, T
 from app.gateways.llm.models import LLMRequest, LLMResponse, TokenUsage
@@ -183,17 +184,32 @@ class GeminiGateway(LLMGateway):
             )
         except Exception as exc:
             classified = _classify_exception(exc)
+            elapsed_seconds = time.perf_counter() - start
             logger.error(
                 "gemini_generate_failed",
                 provider="gemini",
                 model=self._model,
                 operation="generate",
-                elapsed_ms=(time.perf_counter() - start) * 1000,
+                elapsed_ms=elapsed_seconds * 1000,
                 error_type=type(exc).__name__,
                 retryable=isinstance(classified, TransientGatewayError),
             )
+            record_llm_request(
+                provider="gemini",
+                model=self._model,
+                operation="generate",
+                status="failure",
+                elapsed_seconds=elapsed_seconds,
+            )
             raise classified from exc
-        latency_ms = (time.perf_counter() - start) * 1000
+        elapsed_seconds = time.perf_counter() - start
+        record_llm_request(
+            provider="gemini",
+            model=self._model,
+            operation="generate",
+            status="success",
+            elapsed_seconds=elapsed_seconds,
+        )
 
         return LLMResponse(
             content=response.text or "",
@@ -201,7 +217,7 @@ class GeminiGateway(LLMGateway):
             model=self._model,
             usage=self._extract_usage(response),
             cost=None,
-            latency_ms=latency_ms,
+            latency_ms=elapsed_seconds * 1000,
             finish_reason=self._extract_finish_reason(response),
         )
 
@@ -289,18 +305,33 @@ class GeminiGateway(LLMGateway):
             )
         except Exception as exc:
             classified = _classify_exception(exc)
+            elapsed_seconds = time.perf_counter() - start
             logger.error(
                 "gemini_generate_structured_failed",
                 provider="gemini",
                 model=self._model,
                 operation="generate_structured",
                 response_model=response_model.__name__,
-                elapsed_ms=(time.perf_counter() - start) * 1000,
+                elapsed_ms=elapsed_seconds * 1000,
                 error_type=type(exc).__name__,
                 retryable=isinstance(classified, TransientGatewayError),
             )
+            record_llm_request(
+                provider="gemini",
+                model=self._model,
+                operation="generate_structured",
+                status="failure",
+                elapsed_seconds=elapsed_seconds,
+            )
             raise classified from exc
-        elapsed_ms = (time.perf_counter() - start) * 1000
+        elapsed_seconds = time.perf_counter() - start
+        record_llm_request(
+            provider="gemini",
+            model=self._model,
+            operation="generate_structured",
+            status="success",
+            elapsed_seconds=elapsed_seconds,
+        )
 
         usage = self._extract_usage(response)
         logger.info(
@@ -309,7 +340,7 @@ class GeminiGateway(LLMGateway):
             model=self._model,
             operation="generate_structured",
             response_model=response_model.__name__,
-            elapsed_ms=elapsed_ms,
+            elapsed_ms=elapsed_seconds * 1000,
             prompt_tokens=usage.prompt_tokens if usage else None,
             completion_tokens=usage.completion_tokens if usage else None,
             total_tokens=usage.total_tokens if usage else None,

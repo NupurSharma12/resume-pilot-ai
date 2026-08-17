@@ -61,6 +61,7 @@ from pydantic import ValidationError
 
 from app.core.config import Settings
 from app.core.logging import get_logger
+from app.core.metrics import record_llm_request
 from app.gateways.llm.errors import GatewayError, PermanentGatewayError, TransientGatewayError
 from app.gateways.llm.gateway import LLMGateway, T
 from app.gateways.llm.models import LLMRequest, LLMResponse, TokenUsage
@@ -276,16 +277,23 @@ class OpenRouterGateway(LLMGateway):
             try:
                 result = await attempt(model)
             except TransientGatewayError as exc:
-                elapsed_ms = (time.perf_counter() - start) * 1000
+                elapsed_seconds = time.perf_counter() - start
                 logger.info(
                     "openrouter_model_failed",
                     operation=method_name,
                     model=model,
                     attempt=attempt_number,
-                    elapsed_ms=elapsed_ms,
+                    elapsed_ms=elapsed_seconds * 1000,
                     error_type=type(exc).__name__,
                     error=str(exc),
                     retryable=True,
+                )
+                record_llm_request(
+                    provider="openrouter",
+                    model=model,
+                    operation=method_name,
+                    status="failure",
+                    elapsed_seconds=elapsed_seconds,
                 )
                 if attempt_number < len(self._models):
                     logger.info(
@@ -296,14 +304,34 @@ class OpenRouterGateway(LLMGateway):
                     )
                 last_transient_error = exc
                 continue
+            except PermanentGatewayError:
+                # Not retried against another model (see this module's
+                # docstring) -- still recorded as a failed LLM request
+                # before propagating unchanged, exactly like the
+                # transient branch above.
+                record_llm_request(
+                    provider="openrouter",
+                    model=model,
+                    operation=method_name,
+                    status="failure",
+                    elapsed_seconds=time.perf_counter() - start,
+                )
+                raise
 
-            elapsed_ms = (time.perf_counter() - start) * 1000
+            elapsed_seconds = time.perf_counter() - start
             logger.info(
                 "openrouter_model_succeeded",
                 operation=method_name,
                 model=model,
                 attempt=attempt_number,
-                elapsed_ms=elapsed_ms,
+                elapsed_ms=elapsed_seconds * 1000,
+            )
+            record_llm_request(
+                provider="openrouter",
+                model=model,
+                operation=method_name,
+                status="success",
+                elapsed_seconds=elapsed_seconds,
             )
             logger.info(
                 "openrouter_model_chain_summary",
