@@ -76,13 +76,23 @@ class JobPreparationSummaryResponse(BaseModel):
 
 
 class JobPreparationListResponse(BaseModel):
-    """Response body for `GET /v1/job-preparations`."""
+    """Response body for `GET /v1/job-preparations` -- one page plus pagination metadata.
+
+    `total` is the count of *every* matching job preparation across all pages (via
+    `PersistenceStore.count_job_preparations`, same filters as `items`), not `len(items)` --
+    what lets a caller compute total page count / whether a next page exists without an extra
+    request. `limit`/`offset` echo back exactly what was requested, so a caller building the next
+    page's request doesn't need to have remembered its own inputs.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     items: list[JobPreparationSummaryResponse] = Field(
-        description="Matching job preparations, newest-updated first."
+        description="This page's matching job preparations, newest-updated first."
     )
+    total: int = Field(description="Total number of matching job preparations across all pages.")
+    limit: int = Field(description="The page size this response was fetched with.")
+    offset: int = Field(description="The offset this response was fetched with.")
 
 
 class JobPreparationDetailResponse(BaseModel):

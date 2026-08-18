@@ -1,22 +1,29 @@
 import type {
   InterviewPreparation,
   JobPreparationDetail,
-  JobPreparationSummary,
+  JobPreparationListResult,
 } from '../data/jobPreparationHistoryTypes'
 import { ApiError } from './api'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL
 
 // Calls the backend's GET /v1/job-preparations -- the History list.
-// `limit` is the only filter sent (History shows only its 10 most
-// recent); search is client-side over the returned page (see
-// HistoryPage), not a server-side filter -- the backend already supports
-// company/job_title/updated_after too, unused here.
+// `search`/`limit`/`offset` are sent straight through as query params --
+// both search and pagination are server-side (see the History
+// server-side pagination/search decision; the backend already supported
+// company/job_title/updated_after too, still unused here). Returns the
+// full result object (items + total + limit + offset), not just the
+// items array, since HistoryPage needs `total` to render pagination
+// controls.
 export async function listJobPreparations(options?: {
+  search?: string
   limit?: number
-}): Promise<JobPreparationSummary[]> {
+  offset?: number
+}): Promise<JobPreparationListResult> {
   const params = new URLSearchParams()
+  if (options?.search !== undefined) params.set('search', options.search)
   if (options?.limit !== undefined) params.set('limit', String(options.limit))
+  if (options?.offset !== undefined) params.set('offset', String(options.offset))
   const query = params.toString()
 
   let response: Response
@@ -30,8 +37,7 @@ export async function listJobPreparations(options?: {
     throw new ApiError(`Loading history failed (HTTP ${response.status}).`)
   }
 
-  const body = (await response.json()) as { items: JobPreparationSummary[] }
-  return body.items
+  return (await response.json()) as JobPreparationListResult
 }
 
 // Calls the backend's GET /v1/job-preparations/{id} -- opening one

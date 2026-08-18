@@ -169,7 +169,16 @@ test.describe('History Resumability: Continue', () => {
         await route.continue()
         return
       }
-      await route.fulfill({ json: { items: allSummaries } })
+      // Mirrors the real backend's server-side search (case-insensitive
+      // substring match against job_title) -- History's search box now
+      // round-trips through this route instead of filtering client-side,
+      // so `openContinueDialog` below (which searches to narrow down to
+      // one row before clicking) needs the mock to actually filter too.
+      const search = new URL(route.request().url()).searchParams.get('search')
+      const items = search
+        ? allSummaries.filter((s) => s.job_title.toLowerCase().includes(search.toLowerCase()))
+        : allSummaries
+      await route.fulfill({ json: { items, total: items.length, limit: 10, offset: 0 } })
     })
     for (const summary of allSummaries) {
       await page.route(`**/v1/job-preparations/${summary.id}`, async (route) => {
@@ -210,7 +219,12 @@ test.describe('History Resumability: Continue', () => {
     const main = page.locator('main')
     await expect(main.getByText(jobTitle)).toBeVisible()
     await page.getByLabel('Search job preparations').fill(jobTitle)
-    await main.getByRole('button', { name: 'Continue Preparation' }).click()
+    // Search is server-side and debounced (see HistoryPage) -- give the
+    // debounced request time to land and narrow the list down to one
+    // row before clicking, rather than racing it.
+    const continueButton = main.getByRole('button', { name: 'Continue Preparation' })
+    await expect(continueButton).toHaveCount(1)
+    await continueButton.click()
     await expect(page.getByText('Continue this preparation?')).toBeVisible()
   }
 

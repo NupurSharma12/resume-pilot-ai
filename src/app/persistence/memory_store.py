@@ -219,15 +219,22 @@ class InMemoryPersistenceStore:
         self._job_preparations[updated.id] = updated
         return updated
 
-    async def list_job_preparations(
+    def _resume_name_for(self, job_preparation: JobPreparation) -> str:
+        version = self._resume_versions[job_preparation.source_resume_version_id]
+        return self._resumes[version.resume_id].name
+
+    def _filtered_job_preparations(
         self,
         *,
-        resume_id: UUID | None = None,
-        company: str | None = None,
-        job_title: str | None = None,
-        updated_after: datetime | None = None,
-        limit: int = 50,
+        resume_id: UUID | None,
+        company: str | None,
+        job_title: str | None,
+        updated_after: datetime | None,
+        search: str | None,
     ) -> list[JobPreparation]:
+        """Shared filtering logic for `list_job_preparations`/`count_job_preparations` --
+        unsorted, unsliced; each caller applies its own ordering/pagination or just takes `len()`.
+        """
         results = [
             jp
             for jp in self._job_preparations.values()
@@ -245,8 +252,56 @@ class InMemoryPersistenceStore:
             results = [jp for jp in results if jp.job_title == job_title]
         if updated_after is not None:
             results = [jp for jp in results if jp.updated_at > updated_after]
+        if search is not None:
+            term = search.lower()
+            results = [
+                jp
+                for jp in results
+                if term in jp.job_title.lower()
+                or (jp.company is not None and term in jp.company.lower())
+                or term in self._resume_name_for(jp).lower()
+            ]
+        return results
+
+    async def list_job_preparations(
+        self,
+        *,
+        resume_id: UUID | None = None,
+        company: str | None = None,
+        job_title: str | None = None,
+        updated_after: datetime | None = None,
+        search: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[JobPreparation]:
+        results = self._filtered_job_preparations(
+            resume_id=resume_id,
+            company=company,
+            job_title=job_title,
+            updated_after=updated_after,
+            search=search,
+        )
         results.sort(key=lambda jp: jp.updated_at, reverse=True)
-        return results[:limit]
+        return results[offset : offset + limit]
+
+    async def count_job_preparations(
+        self,
+        *,
+        resume_id: UUID | None = None,
+        company: str | None = None,
+        job_title: str | None = None,
+        updated_after: datetime | None = None,
+        search: str | None = None,
+    ) -> int:
+        return len(
+            self._filtered_job_preparations(
+                resume_id=resume_id,
+                company=company,
+                job_title=job_title,
+                updated_after=updated_after,
+                search=search,
+            )
+        )
 
     async def soft_delete_job_preparation(self, job_preparation_id: UUID) -> JobPreparation:
         current = self._job_preparations.get(job_preparation_id)

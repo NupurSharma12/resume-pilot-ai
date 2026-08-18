@@ -165,7 +165,7 @@ test.describe('History screen', () => {
     page,
   }) => {
     await page.route('**/v1/job-preparations*', async (route) => {
-      await route.fulfill({ json: { items: [partialSummary] } })
+      await route.fulfill({ json: { items: [partialSummary], total: 1, limit: 10, offset: 0 } })
     })
     await page.route(`**/v1/job-preparations/${JOB_PREPARATION_ID}`, async (route) => {
       await route.fulfill({ json: partialDetail })
@@ -217,7 +217,7 @@ test.describe('History screen', () => {
     page,
   }) => {
     await page.route('**/v1/job-preparations*', async (route) => {
-      await route.fulfill({ json: { items: [partialSummary] } })
+      await route.fulfill({ json: { items: [partialSummary], total: 1, limit: 10, offset: 0 } })
     })
     await page.route(`**/v1/job-preparations/${JOB_PREPARATION_ID}`, async (route) => {
       await route.fulfill({ json: partialDetail })
@@ -249,7 +249,7 @@ test.describe('History screen', () => {
 
   test('shows an empty state when there is no history yet', async ({ page }) => {
     await page.route('**/v1/job-preparations*', async (route) => {
-      await route.fulfill({ json: { items: [] } })
+      await route.fulfill({ json: { items: [], total: 0, limit: 10, offset: 0 } })
     })
 
     await page.goto('/history')
@@ -265,7 +265,7 @@ test.describe('History screen: Delete', () => {
     let listCallCount = 0
     await page.route('**/v1/job-preparations*', async (route) => {
       listCallCount += 1
-      await route.fulfill({ json: { items: [partialSummary] } })
+      await route.fulfill({ json: { items: [partialSummary], total: 1, limit: 10, offset: 0 } })
     })
     let deleteCallCount = 0
     await page.route(`**/v1/job-preparations/${JOB_PREPARATION_ID}`, async (route) => {
@@ -312,7 +312,7 @@ test.describe('History screen: Delete', () => {
 
   test('shows an inline error and keeps the item when delete fails', async ({ page }) => {
     await page.route('**/v1/job-preparations*', async (route) => {
-      await route.fulfill({ json: { items: [partialSummary] } })
+      await route.fulfill({ json: { items: [partialSummary], total: 1, limit: 10, offset: 0 } })
     })
     await page.route(`**/v1/job-preparations/${JOB_PREPARATION_ID}`, async (route) => {
       if (route.request().method() === 'DELETE') {

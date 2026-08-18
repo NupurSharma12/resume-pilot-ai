@@ -632,3 +632,187 @@ async def test_soft_delete_is_idempotent(store: PersistenceStore) -> None:
 async def test_soft_delete_for_an_unknown_id_raises(store: PersistenceStore) -> None:
     with pytest.raises(JobPreparationNotFoundError):
         await store.soft_delete_job_preparation(uuid.uuid4())
+
+
+# ---- list_job_preparations: offset pagination / search / count_job_preparations ----
+
+
+async def test_offset_skips_the_given_number_of_newest_first_results(
+    store: PersistenceStore,
+) -> None:
+    _resume, version = await _seed_resume_version(store)
+    company = f"Acme-{uuid.uuid4()}"
+    # Created in order -- `list_job_preparations` sorts newest-`updated_at`-first, so this
+    # list is expected back in reverse creation order.
+    created = [
+        await store.create_job_preparation(
+            source_resume_version_id=version.id,
+            job_title=f"Role {i}",
+            job_description="Build things.",
+            company=company,
+        )
+        for i in range(5)
+    ]
+    expected_order = list(reversed(created))
+
+    first_page = await store.list_job_preparations(company=company, limit=2, offset=0)
+    second_page = await store.list_job_preparations(company=company, limit=2, offset=2)
+    third_page = await store.list_job_preparations(company=company, limit=2, offset=4)
+    past_the_end = await store.list_job_preparations(company=company, limit=2, offset=10)
+
+    assert [jp.id for jp in first_page] == [jp.id for jp in expected_order[0:2]]
+    assert [jp.id for jp in second_page] == [jp.id for jp in expected_order[2:4]]
+    assert [jp.id for jp in third_page] == [jp.id for jp in expected_order[4:5]]
+    assert past_the_end == []
+
+
+async def test_search_matches_job_title_case_insensitively(store: PersistenceStore) -> None:
+    _resume, version = await _seed_resume_version(store)
+    company = f"Acme-{uuid.uuid4()}"
+    match = await store.create_job_preparation(
+        source_resume_version_id=version.id,
+        job_title="Senior Backend Engineer",
+        job_description="Build things.",
+        company=company,
+    )
+    await store.create_job_preparation(
+        source_resume_version_id=version.id,
+        job_title="Product Manager",
+        job_description="Build things.",
+        company=company,
+    )
+
+    results = await store.list_job_preparations(company=company, search="BACKEND")
+
+    assert [jp.id for jp in results] == [match.id]
+
+
+async def test_search_matches_company_case_insensitively(store: PersistenceStore) -> None:
+    _resume, version = await _seed_resume_version(store)
+    unique = str(uuid.uuid4())
+    match = await store.create_job_preparation(
+        source_resume_version_id=version.id,
+        job_title="Backend Engineer",
+        job_description="Build things.",
+        company=f"Initech-{unique}",
+    )
+    other = await store.create_job_preparation(
+        source_resume_version_id=version.id,
+        job_title="Backend Engineer",
+        job_description="Build things.",
+        company=f"Acme-{unique}",
+    )
+
+    results = await store.list_job_preparations(search=f"initech-{unique}".lower())
+
+    result_ids = {jp.id for jp in results}
+    assert match.id in result_ids
+    assert other.id not in result_ids
+
+
+async def test_search_matches_the_resume_name(store: PersistenceStore) -> None:
+    unique = str(uuid.uuid4())
+    resume = await store.create_resume(name=f"Distinctive Resume Name {unique}")
+    version = await store.create_resume_version(
+        resume.id, content="Resume text.", source=ResumeVersionSource.ORIGINAL_UPLOAD
+    )
+    company = f"Acme-{uuid.uuid4()}"
+    match = await store.create_job_preparation(
+        source_resume_version_id=version.id,
+        job_title="Backend Engineer",
+        job_description="Build things.",
+        company=company,
+    )
+
+    results = await store.list_job_preparations(company=company, search=unique)
+
+    assert [jp.id for jp in results] == [match.id]
+
+
+async def test_search_with_no_match_returns_empty(store: PersistenceStore) -> None:
+    _resume, version = await _seed_resume_version(store)
+    company = f"Acme-{uuid.uuid4()}"
+    await store.create_job_preparation(
+        source_resume_version_id=version.id,
+        job_title="Backend Engineer",
+        job_description="Build things.",
+        company=company,
+    )
+
+    results = await store.list_job_preparations(
+        company=company, search=f"nonexistent-{uuid.uuid4()}"
+    )
+
+    assert results == []
+
+
+async def test_count_job_preparations_matches_the_same_filters_as_list(
+    store: PersistenceStore,
+) -> None:
+    _resume, version = await _seed_resume_version(store)
+    company = f"Acme-{uuid.uuid4()}"
+    for i in range(3):
+        await store.create_job_preparation(
+            source_resume_version_id=version.id,
+            job_title=f"Role {i}",
+            job_description="Build things.",
+            company=company,
+        )
+
+    total = await store.count_job_preparations(company=company)
+    # A `limit` smaller than the total still reports the *total* count,
+    # not the page size -- the whole point of a separate count.
+    page = await store.list_job_preparations(company=company, limit=1)
+
+    assert total == 3
+    assert len(page) == 1
+
+
+async def test_count_job_preparations_excludes_test_only_and_soft_deleted(
+    store: PersistenceStore,
+) -> None:
+    _resume, version = await _seed_resume_version(store)
+    company = f"Acme-{uuid.uuid4()}"
+    counted = await store.create_job_preparation(
+        source_resume_version_id=version.id,
+        job_title="Backend Engineer",
+        job_description="Build things.",
+        company=company,
+    )
+    await store.create_job_preparation(
+        source_resume_version_id=version.id,
+        job_title="Excluded Test Preparation",
+        job_description="Build things.",
+        company=company,
+        include_in_history=False,
+    )
+    to_delete = await store.create_job_preparation(
+        source_resume_version_id=version.id,
+        job_title="Soon Deleted",
+        job_description="Build things.",
+        company=company,
+    )
+    await store.soft_delete_job_preparation(to_delete.id)
+
+    assert await store.count_job_preparations(company=company) == 1
+    assert [jp.id for jp in await store.list_job_preparations(company=company)] == [counted.id]
+
+
+async def test_count_job_preparations_respects_search(store: PersistenceStore) -> None:
+    _resume, version = await _seed_resume_version(store)
+    company = f"Acme-{uuid.uuid4()}"
+    await store.create_job_preparation(
+        source_resume_version_id=version.id,
+        job_title="Senior Backend Engineer",
+        job_description="Build things.",
+        company=company,
+    )
+    await store.create_job_preparation(
+        source_resume_version_id=version.id,
+        job_title="Product Manager",
+        job_description="Build things.",
+        company=company,
+    )
+
+    assert await store.count_job_preparations(company=company, search="backend") == 1
+    assert await store.count_job_preparations(company=company) == 2

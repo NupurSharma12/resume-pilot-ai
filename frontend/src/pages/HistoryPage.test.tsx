@@ -9,8 +9,21 @@ import type {
   CheckpointStatus,
   InterviewPreparation,
   JobPreparationDetail,
+  JobPreparationListResult,
   JobPreparationSummary,
 } from '../data/jobPreparationHistoryTypes'
+
+// Wraps a bare items array into the full `JobPreparationListResult`
+// shape `listJobPreparations` actually resolves with -- `total` defaults
+// to `items.length` (the common case: everything fetched fits on one
+// page), overridable for the pagination-specific tests below that need
+// `total` to exceed the page size.
+function listResult(
+  items: JobPreparationSummary[],
+  overrides: Partial<Omit<JobPreparationListResult, 'items'>> = {},
+): JobPreparationListResult {
+  return { items, total: items.length, limit: 10, offset: 0, ...overrides }
+}
 
 vi.mock('../lib/jobPreparationHistoryApi')
 vi.mock('../session/ResumeSessionContext', async (importOriginal) => {
@@ -129,7 +142,7 @@ describe('HistoryPage', () => {
   })
 
   it('shows an empty state when there is no history yet', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([])
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([]))
 
     renderPage()
 
@@ -139,7 +152,7 @@ describe('HistoryPage', () => {
   })
 
   it('renders each preparation with resume/job/company, last updated, and checkpoints', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
 
     renderPage()
 
@@ -156,9 +169,9 @@ describe('HistoryPage', () => {
   })
 
   it('shows a partially complete preparation honestly -- incomplete checkpoints are never marked done', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([
       { ...fixtureSummary, checkpoints: fixtureCheckpointsPartial },
-    ])
+    ]))
 
     renderPage()
 
@@ -192,14 +205,14 @@ describe('HistoryPage', () => {
       expect(screen.getByText('Could not reach the history service.')).toBeInTheDocument(),
     )
 
-    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
     fireEvent.click(screen.getByRole('button', { name: /try again/i }))
 
     await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
   })
 
   it('opens a preparation and renders its persisted checkpoint data', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
     mockedApi.getJobPreparation.mockResolvedValue(fixtureDetail)
 
     renderPage()
@@ -228,7 +241,7 @@ describe('HistoryPage', () => {
   })
 
   it('never claims a checkpoint is complete for a section with no persisted payload', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
     mockedApi.getJobPreparation.mockResolvedValue({
       ...fixtureDetail,
       checkpoints: fixtureCheckpointsPartial,
@@ -248,7 +261,7 @@ describe('HistoryPage', () => {
   })
 
   it('shows a retryable error state when opening a preparation fails, and can go back to the list', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
     mockedApi.getJobPreparation.mockRejectedValue(
       new ApiError('This job preparation no longer exists.', { cause: 'not_found' }),
     )
@@ -270,7 +283,7 @@ describe('HistoryPage', () => {
   })
 
   it('shows an empty state with a generate action when no interview preparation exists yet', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
     mockedApi.getJobPreparation.mockResolvedValue(fixtureDetail)
 
     renderPage()
@@ -285,7 +298,7 @@ describe('HistoryPage', () => {
   })
 
   it('renders system design, coding, and behavioral questions once a guide is persisted', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
     mockedApi.getJobPreparation.mockResolvedValue({
       ...fixtureDetail,
       interview_preparation: fixtureInterviewPreparation,
@@ -310,7 +323,7 @@ describe('HistoryPage', () => {
   })
 
   it('generates an interview preparation guide and renders it once the call resolves', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
     mockedApi.getJobPreparation.mockResolvedValue(fixtureDetail)
     let resolveGeneration: (value: InterviewPreparation) => void = () => {}
     mockedApi.generateInterviewPreparation.mockReturnValue(
@@ -342,7 +355,7 @@ describe('HistoryPage', () => {
   })
 
   it('shows a retryable error state when generation fails', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
     mockedApi.getJobPreparation.mockResolvedValue(fixtureDetail)
     mockedApi.generateInterviewPreparation.mockRejectedValue(
       new ApiError('Generating interview preparation failed.'),
@@ -371,15 +384,17 @@ describe('HistoryPage', () => {
     )
   })
 
-  it('requests only the 10 most recent preparations', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+  it('requests the first page of 10 most recent preparations', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
 
     renderPage()
 
-    await waitFor(() => expect(mockedApi.listJobPreparations).toHaveBeenCalledWith({ limit: 10 }))
+    await waitFor(() =>
+      expect(mockedApi.listJobPreparations).toHaveBeenCalledWith({ limit: 10, offset: 0 }),
+    )
   })
 
-  it('filters the list client-side by job title, company, or resume name', async () => {
+  it('searches server-side (debounced) by job title, company, or resume name', async () => {
     const other: JobPreparationSummary = {
       ...fixtureSummary,
       id: 'job-prep-2',
@@ -387,39 +402,172 @@ describe('HistoryPage', () => {
       company: 'Initech',
       resume_name: 'PM Resume',
     }
-    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary, other])
+    // The initial, unfiltered load; the debounced search request that
+    // follows typing "initech" gets its own, narrower mock below.
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary, other]))
 
     renderPage()
     await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
     expect(screen.getByText('Product Manager')).toBeInTheDocument()
 
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([other]))
     fireEvent.change(screen.getByLabelText(/search job preparations/i), {
       target: { value: 'initech' },
     })
 
+    // Debounced -- the request (and the resulting re-render) only fires
+    // once typing has settled, not on every keystroke.
+    await waitFor(() =>
+      expect(mockedApi.listJobPreparations).toHaveBeenLastCalledWith({
+        limit: 10,
+        offset: 0,
+        search: 'initech',
+      }),
+    )
     await waitFor(() => expect(screen.queryByText('Senior Engineer')).not.toBeInTheDocument())
     expect(screen.getByText('Product Manager')).toBeInTheDocument()
   })
 
+  it('does not fire a search request on every keystroke -- only after typing settles', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
+
+    renderPage()
+    await waitFor(() => expect(mockedApi.listJobPreparations).toHaveBeenCalledTimes(1))
+
+    const searchInput = screen.getByLabelText(/search job preparations/i)
+    fireEvent.change(searchInput, { target: { value: 'i' } })
+    fireEvent.change(searchInput, { target: { value: 'in' } })
+    fireEvent.change(searchInput, { target: { value: 'ini' } })
+
+    // Still just the one, initial (no-search) call -- the three
+    // keystrokes above haven't debounced into a request yet.
+    expect(mockedApi.listJobPreparations).toHaveBeenCalledTimes(1)
+
+    await waitFor(() =>
+      expect(mockedApi.listJobPreparations).toHaveBeenLastCalledWith({
+        limit: 10,
+        offset: 0,
+        search: 'ini',
+      }),
+    )
+    // Exactly one more call once debounced -- never one per keystroke.
+    expect(mockedApi.listJobPreparations).toHaveBeenCalledTimes(2)
+  })
+
   it('shows a no-match state when the search query matches nothing', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
 
     renderPage()
     await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
 
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([]))
     fireEvent.change(screen.getByLabelText(/search job preparations/i), {
       target: { value: 'nonexistent role' },
     })
 
     await waitFor(() =>
-      expect(screen.getByText(/no preparations match/i)).toBeInTheDocument(),
+      expect(screen.getByText(/no preparations match "nonexistent role"/i)).toBeInTheDocument(),
     )
   })
 
+  it('shows pagination summary text and disables Previous on the first page', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary], { total: 25 }))
+
+    renderPage()
+
+    await waitFor(() => expect(screen.getByText('Showing 1-1 of 25')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /previous/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /next/i })).not.toBeDisabled()
+  })
+
+  it('Next requests the next page with an advanced offset', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue(
+      listResult(Array.from({ length: 10 }, (_, i) => ({ ...fixtureSummary, id: `job-prep-page1-${i}` })), { total: 25, offset: 0 }),
+    )
+
+    renderPage()
+    await waitFor(() => expect(mockedApi.listJobPreparations).toHaveBeenCalledTimes(1))
+
+    const secondPageItem: JobPreparationSummary = { ...fixtureSummary, id: 'job-prep-page-2' }
+    mockedApi.listJobPreparations.mockResolvedValue(
+      listResult([secondPageItem], { total: 25, offset: 10 }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /next/i }))
+
+    await waitFor(() =>
+      expect(mockedApi.listJobPreparations).toHaveBeenLastCalledWith({ limit: 10, offset: 10 }),
+    )
+    await waitFor(() => expect(screen.getByText('Showing 11-11 of 25')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /previous/i })).not.toBeDisabled()
+  })
+
+  it('disables Next on the last page', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue(
+      listResult(
+        Array.from({ length: 10 }, (_, i) => ({ ...fixtureSummary, id: `job-prep-lastpage-${i}` })),
+        { total: 11, offset: 0 },
+      ),
+    )
+    renderPage()
+    await waitFor(() => expect(mockedApi.listJobPreparations).toHaveBeenCalledTimes(1))
+
+    // Drive it to the actual last page via Next -- the component's own
+    // `offset` is state it owns, never something a mocked response can
+    // set on its own; only clicking Next advances it.
+    mockedApi.listJobPreparations.mockResolvedValue(
+      listResult([fixtureSummary], { total: 11, offset: 10 }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /next/i }))
+
+    await waitFor(() => expect(screen.getByText('Showing 11-11 of 11')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /next/i })).toBeDisabled()
+  })
+
+  it('a new search resets pagination back to the first page', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue(
+      listResult(Array.from({ length: 10 }, (_, i) => ({ ...fixtureSummary, id: `job-prep-page1-${i}` })), { total: 25, offset: 0 }),
+    )
+    renderPage()
+    await waitFor(() => expect(mockedApi.listJobPreparations).toHaveBeenCalledTimes(1))
+
+    mockedApi.listJobPreparations.mockResolvedValue(
+      listResult([fixtureSummary], { total: 25, offset: 10 }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /next/i }))
+    await waitFor(() =>
+      expect(mockedApi.listJobPreparations).toHaveBeenLastCalledWith({ limit: 10, offset: 10 }),
+    )
+
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary], { total: 1 }))
+    fireEvent.change(screen.getByLabelText(/search job preparations/i), {
+      target: { value: 'senior' },
+    })
+
+    await waitFor(() =>
+      expect(mockedApi.listJobPreparations).toHaveBeenLastCalledWith({
+        limit: 10,
+        offset: 0,
+        search: 'senior',
+      }),
+    )
+  })
+
+  it('does not show pagination controls when there is no history at all', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([]))
+
+    renderPage()
+
+    await waitFor(() =>
+      expect(screen.getByText(/analysis history is coming soon/i)).toBeInTheDocument(),
+    )
+    expect(screen.queryByRole('button', { name: /previous/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /next/i })).not.toBeInTheDocument()
+  })
+
   it('shows both Continue and View for an unfinished preparation', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([
       { ...fixtureSummary, checkpoints: fixtureCheckpointsPartial },
-    ])
+    ]))
 
     renderPage()
 
@@ -430,7 +578,7 @@ describe('HistoryPage', () => {
   })
 
   it('shows View only (no Continue) for a fully completed preparation', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
 
     renderPage()
 
@@ -442,9 +590,9 @@ describe('HistoryPage', () => {
   })
 
   it('opens a confirmation dialog showing completed checkpoints when Continue is clicked', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([
       { ...fixtureSummary, checkpoints: fixtureCheckpointsPartial },
-    ])
+    ]))
 
     renderPage()
     await waitFor(() =>
@@ -460,9 +608,9 @@ describe('HistoryPage', () => {
   })
 
   it('cancelling the confirmation dialog does not rehydrate or navigate', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([
       { ...fixtureSummary, checkpoints: fixtureCheckpointsPartial },
-    ])
+    ]))
 
     renderPage()
     await waitFor(() =>
@@ -477,9 +625,9 @@ describe('HistoryPage', () => {
   })
 
   it('confirming Continue fetches the full detail, rehydrates the session, and navigates to the next stage', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([
       { ...fixtureSummary, checkpoints: fixtureCheckpointsPartial },
-    ])
+    ]))
     mockedApi.getJobPreparation.mockResolvedValue({
       ...fixtureDetail,
       checkpoints: fixtureCheckpointsPartial,
@@ -505,9 +653,9 @@ describe('HistoryPage', () => {
   })
 
   it('shows a retryable error in the dialog when fetching the detail fails, without closing it', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([
       { ...fixtureSummary, checkpoints: fixtureCheckpointsPartial },
-    ])
+    ]))
     mockedApi.getJobPreparation.mockRejectedValue(
       new ApiError('This job preparation no longer exists.', { cause: 'not_found' }),
     )
@@ -528,9 +676,9 @@ describe('HistoryPage', () => {
   })
 
   it('shows a graceful error in the dialog when rehydration itself reports invalid persisted data, without navigating', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([
       { ...fixtureSummary, checkpoints: fixtureCheckpointsPartial },
-    ])
+    ]))
     mockedApi.getJobPreparation.mockResolvedValue({
       ...fixtureDetail,
       checkpoints: fixtureCheckpointsPartial,
@@ -557,7 +705,7 @@ describe('HistoryPage', () => {
   })
 
   it('Delete opens a confirmation dialog', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
 
     renderPage()
     await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
@@ -569,7 +717,7 @@ describe('HistoryPage', () => {
   })
 
   it('Cancel does not delete', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
 
     renderPage()
     await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
@@ -583,7 +731,7 @@ describe('HistoryPage', () => {
   })
 
   it('Confirm soft-deletes and the preparation disappears from History without a reload', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
     mockedApi.deleteJobPreparation.mockResolvedValue(undefined)
 
     renderPage()
@@ -602,7 +750,7 @@ describe('HistoryPage', () => {
   })
 
   it('deleting an already-deleted/nonexistent preparation is handled cleanly (treated as success)', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
     mockedApi.deleteJobPreparation.mockRejectedValue(
       new ApiError('This job preparation no longer exists.', { cause: 'not_found' }),
     )
@@ -619,7 +767,7 @@ describe('HistoryPage', () => {
   })
 
   it('shows an inline error in the dialog when delete fails for another reason, without closing it', async () => {
-    mockedApi.listJobPreparations.mockResolvedValue([fixtureSummary])
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
     mockedApi.deleteJobPreparation.mockRejectedValue(
       new ApiError('Could not reach the history service. Is the backend running?'),
     )
