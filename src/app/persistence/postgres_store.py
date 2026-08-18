@@ -63,7 +63,7 @@ an ordinary, expected `PersistenceError`.
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
@@ -468,6 +468,53 @@ class PostgresPersistenceStore:
             await session.refresh(current)
             return _job_preparation_from_row(current)
 
+    @staticmethod
+    def _filtered_job_preparations_query(
+        *,
+        resume_id: uuid.UUID | None,
+        company: str | None,
+        job_title: str | None,
+        updated_after: datetime | None,
+        search: str | None,
+    ):
+        """Shared filtered (unordered, unpaginated) query for `list_job_preparations`/
+        `count_job_preparations` -- each caller adds its own `order_by`/`limit`/`offset`, or
+        wraps this in a `SELECT count(*)`.
+
+        `ResumeVersionRow` is joined at most once even when both `resume_id` and `search` need
+        it (SQLAlchemy raises on a duplicate join to the same table); `ResumeRow` is only joined
+        when `search` actually needs the resume's name, matching `resume_id`'s own join being
+        conditional on that filter being used at all.
+        """
+        query = select(JobPreparationRow).where(
+            JobPreparationRow.include_in_history.is_(True),
+            JobPreparationRow.deleted_at.is_(None),
+        )
+        if resume_id is not None or search is not None:
+            query = query.join(
+                ResumeVersionRow,
+                JobPreparationRow.source_resume_version_id == ResumeVersionRow.id,
+            )
+        if resume_id is not None:
+            query = query.where(ResumeVersionRow.resume_id == resume_id)
+        if search is not None:
+            query = query.join(ResumeRow, ResumeVersionRow.resume_id == ResumeRow.id)
+            term = f"%{search}%"
+            query = query.where(
+                or_(
+                    JobPreparationRow.job_title.ilike(term),
+                    JobPreparationRow.company.ilike(term),
+                    ResumeRow.name.ilike(term),
+                )
+            )
+        if company is not None:
+            query = query.where(JobPreparationRow.company == company)
+        if job_title is not None:
+            query = query.where(JobPreparationRow.job_title == job_title)
+        if updated_after is not None:
+            query = query.where(JobPreparationRow.updated_at > updated_after)
+        return query
+
     async def list_job_preparations(
         self,
         *,
@@ -475,28 +522,42 @@ class PostgresPersistenceStore:
         company: str | None = None,
         job_title: str | None = None,
         updated_after: datetime | None = None,
+        search: str | None = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[JobPreparation]:
         async with self._session_factory() as session:
-            query = select(JobPreparationRow).where(
-                JobPreparationRow.include_in_history.is_(True),
-                JobPreparationRow.deleted_at.is_(None),
+            query = self._filtered_job_preparations_query(
+                resume_id=resume_id,
+                company=company,
+                job_title=job_title,
+                updated_after=updated_after,
+                search=search,
             )
-            if resume_id is not None:
-                query = query.join(
-                    ResumeVersionRow,
-                    JobPreparationRow.source_resume_version_id == ResumeVersionRow.id,
-                ).where(ResumeVersionRow.resume_id == resume_id)
-            if company is not None:
-                query = query.where(JobPreparationRow.company == company)
-            if job_title is not None:
-                query = query.where(JobPreparationRow.job_title == job_title)
-            if updated_after is not None:
-                query = query.where(JobPreparationRow.updated_at > updated_after)
-            query = query.order_by(JobPreparationRow.updated_at.desc()).limit(limit)
+            query = query.order_by(JobPreparationRow.updated_at.desc()).limit(limit).offset(offset)
 
             rows = (await session.scalars(query)).all()
             return [_job_preparation_from_row(row) for row in rows]
+
+    async def count_job_preparations(
+        self,
+        *,
+        resume_id: uuid.UUID | None = None,
+        company: str | None = None,
+        job_title: str | None = None,
+        updated_after: datetime | None = None,
+        search: str | None = None,
+    ) -> int:
+        async with self._session_factory() as session:
+            query = self._filtered_job_preparations_query(
+                resume_id=resume_id,
+                company=company,
+                job_title=job_title,
+                updated_after=updated_after,
+                search=search,
+            )
+            count_query = select(func.count()).select_from(query.subquery())
+            return (await session.scalar(count_query)) or 0
 
     async def soft_delete_job_preparation(self, job_preparation_id: uuid.UUID) -> JobPreparation:
         async with self._session_factory() as session, session.begin():

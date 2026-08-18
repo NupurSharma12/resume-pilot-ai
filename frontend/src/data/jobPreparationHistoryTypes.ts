@@ -26,6 +26,19 @@ export interface JobPreparationSummary {
   checkpoints: CheckpointStatus
 }
 
+// Mirrors GET /v1/job-preparations's response body field-for-field
+// (JobPreparationListResponse) -- `total` is the count of every matching
+// preparation across all pages (not `items.length`, which is at most
+// `limit`), so callers can compute page count / whether a next page
+// exists without an extra request. `limit`/`offset` echo back exactly
+// what was requested.
+export interface JobPreparationListResult {
+  items: JobPreparationSummary[]
+  total: number
+  limit: number
+  offset: number
+}
+
 // Mirrors POST /v1/job-preparations/{id}/interview-preparation's response
 // field-for-field (src/app/api/v1/models/interview_preparation.py) -- and,
 // since `record_interview_preparation` persists that exact same shape

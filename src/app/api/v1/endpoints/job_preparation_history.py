@@ -29,7 +29,7 @@ import asyncio
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.v1.models.job_preparation_history import (
     CheckpointStatusResponse,
@@ -98,29 +98,52 @@ async def list_job_preparations(
     company: str | None = None,
     job_title: str | None = None,
     updated_after: datetime | None = None,
-    limit: int = _DEFAULT_LIST_LIMIT,
+    search: str | None = None,
+    limit: int = Query(_DEFAULT_LIST_LIMIT, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     store: PersistenceStore = Depends(get_persistence_store),
 ) -> JobPreparationListResponse:
-    """List job preparations, newest-updated first.
+    """List one page of job preparations, newest-updated first, with server-side search.
 
-    Filters are the same plain-column filters `PersistenceStore.list_job_preparations`
-    already supports -- no full-text/JSONB search (see the History design
-    review's explicit scope). `resume_id` isn't exposed as a query
-    parameter here: nothing in the current frontend has a resume id to
-    filter by (only a `job_preparation_id`, which already identifies one
-    specific preparation, not a resume) -- it can be added later without
-    an API-breaking change if a real caller needs it.
+    `company`/`job_title`/`updated_after` are the same exact-match plain-column filters
+    `PersistenceStore.list_job_preparations` already supported -- still no full-text/JSONB
+    search over the persisted checkpoint payloads (see the History design review's explicit
+    scope, which this endpoint still respects). `search` is a separate, looser filter: a
+    case-insensitive substring match against job title, company, or resume name -- the same
+    three fields History's search box has always searched (originally client-side, over
+    whichever single page happened to already be loaded; see the History server-side
+    pagination/search decision for why this moved server-side, alongside `limit`/`offset`).
+
+    `resume_id` isn't exposed as a query parameter here: nothing in the current frontend has a
+    resume id to filter by (only a `job_preparation_id`, which already identifies one specific
+    preparation, not a resume) -- it can be added later without an API-breaking change if a real
+    caller needs it.
+
+    `total` in the response is a second, independent query (`count_job_preparations`, same
+    filters) run concurrently with the page fetch via `asyncio.gather` -- not `len(items)`,
+    which would only ever be at most `limit`.
     """
-    job_preparations = await store.list_job_preparations(
-        company=company, job_title=job_title, updated_after=updated_after, limit=limit
+    normalized_search = search.strip() if search and search.strip() else None
+    filters = {
+        "company": company,
+        "job_title": job_title,
+        "updated_after": updated_after,
+        "search": normalized_search,
+    }
+    job_preparations, total = await asyncio.gather(
+        store.list_job_preparations(**filters, limit=limit, offset=offset),
+        store.count_job_preparations(**filters),
     )
     resume_names = await asyncio.gather(*(_resume_name_for(store, jp) for jp in job_preparations))
-    logger.info("job_preparations_listed", count=len(job_preparations))
+    logger.info("job_preparations_listed", count=len(job_preparations), total=total, offset=offset)
     return JobPreparationListResponse(
         items=[
             _to_summary_response(jp, resume_name)
             for jp, resume_name in zip(job_preparations, resume_names, strict=True)
-        ]
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
     )
 
 

@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AlertTriangle, ArrowLeft, RotateCw, Search, Sparkles } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, ChevronLeft, ChevronRight, RotateCw, Search, Sparkles } from 'lucide-react'
 import TopHeader from '../components/TopHeader'
 import Button from '../components/Button'
 import InterviewPreparationCard from '../components/InterviewPreparationCard'
@@ -21,12 +21,17 @@ import type {
   JobPreparationSummary,
 } from '../data/jobPreparationHistoryTypes'
 
-// History shows only the 10 most recent preparations -- see the History
-// Resumability design review: "prefer existing APIs and data," no
-// pagination. `listJobPreparations` already supports a `limit` query
-// param server-side (see the backend endpoint's own docstring); this is
-// the one place the frontend opts into a smaller page than its default.
-const HISTORY_LIST_LIMIT = 10
+// History shows 10 preparations per page -- see the History server-side
+// pagination/search decision. Both search and paging now round-trip to
+// the backend (`listJobPreparations` already supports `search`/`limit`/
+// `offset` server-side -- see that endpoint's own docstring), rather
+// than fetching one page and filtering it client-side.
+const HISTORY_PAGE_SIZE = 10
+
+// How long to wait after the user stops typing before firing a new
+// search request -- short enough to feel responsive, long enough that a
+// normal typing cadence doesn't fire one request per keystroke.
+const SEARCH_DEBOUNCE_MS = 300
 
 // A preparation is "complete" once its last checkpoint (re-analysis) is
 // done -- everything upstream of it is necessarily done too, since each
@@ -151,9 +156,19 @@ export default function HistoryPage() {
   const { rehydrateFromHistory } = useResumeSession()
 
   const [items, setItems] = useState<JobPreparationSummary[]>([])
+  const [total, setTotal] = useState(0)
+  const [offset, setOffset] = useState(0)
   const [listStatus, setListStatus] = useState<ListStatus>('loading')
   const [listError, setListError] = useState('')
+
+  // `searchQuery` is what the input reflects as the user types;
+  // `debouncedSearchQuery` (updated `SEARCH_DEBOUNCE_MS` after typing
+  // stops) is what's actually sent to the backend -- see the effect
+  // below. Kept as two separate values, rather than debouncing the
+  // fetch call itself, so the input never feels laggy even though the
+  // request it triggers does.
   const [searchQuery, setSearchQuery] = useState('')
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('')
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<JobPreparationDetail | null>(null)
@@ -179,11 +194,16 @@ export default function HistoryPage() {
   const [deleteStatus, setDeleteStatus] = useState<DeleteStatus>('idle')
   const [deleteError, setDeleteError] = useState('')
 
-  async function loadList() {
+  async function loadList(requestOffset: number, search: string) {
     setListStatus('loading')
     try {
-      const result = await listJobPreparations({ limit: HISTORY_LIST_LIMIT })
-      setItems(result)
+      const result = await listJobPreparations({
+        limit: HISTORY_PAGE_SIZE,
+        offset: requestOffset,
+        ...(search ? { search } : {}),
+      })
+      setItems(result.items)
+      setTotal(result.total)
       setListStatus('success')
     } catch (err) {
       setListError(err instanceof ApiError ? err.message : 'An unexpected error occurred.')
@@ -191,24 +211,30 @@ export default function HistoryPage() {
     }
   }
 
+  // Debounces `searchQuery` into `debouncedSearchQuery` -- see that
+  // state's own comment for why these are two separate values.
   useEffect(() => {
-    loadList()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    const timeoutId = setTimeout(() => setDebouncedSearchQuery(searchQuery), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(timeoutId)
+  }, [searchQuery])
 
-  // Client-side only -- see the design review's "History search should
-  // remain deliberately simple" requirement: no server-side full-text
-  // search, just a substring match over the (at most 10) already-fetched
-  // rows' visible fields.
-  const filteredItems = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase()
-    if (!query) return items
-    return items.filter((item) =>
-      [item.job_title, item.company, item.resume_name].some((field) =>
-        field?.toLowerCase().includes(query),
-      ),
-    )
-  }, [items, searchQuery])
+  // A new search always restarts pagination at the first page -- a
+  // previous page offset almost certainly doesn't apply to a new,
+  // narrower (or wider) result set.
+  useEffect(() => {
+    setOffset(0)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearchQuery])
+
+  useEffect(() => {
+    loadList(offset, debouncedSearchQuery)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offset, debouncedSearchQuery])
+
+  const hasNextPage = offset + items.length < total
+  const hasPreviousPage = offset > 0
+  const firstShownIndex = total === 0 ? 0 : offset + 1
+  const lastShownIndex = offset + items.length
 
   function handleConfirmContinue() {
     if (!continueTarget) return
@@ -245,8 +271,12 @@ export default function HistoryPage() {
       .then(() => {
         // No full reload -- just drop it from the already-loaded list,
         // the same "update in place" approach `handleGenerateInterviewPreparation`
-        // below already uses for its own successful mutation.
+        // below already uses for its own successful mutation. `total` is
+        // decremented alongside it so pagination metadata (Prev/Next,
+        // "X-Y of Z") stays consistent with what's actually still there,
+        // without a second round-trip just to re-fetch the count.
         setItems((current) => current.filter((item) => item.id !== target.id))
+        setTotal((current) => Math.max(0, current - 1))
         setDeleteStatus('idle')
         setDeleteTarget(null)
       })
@@ -258,6 +288,7 @@ export default function HistoryPage() {
         // achieve.
         if (err instanceof ApiError && err.cause === 'not_found') {
           setItems((current) => current.filter((item) => item.id !== target.id))
+          setTotal((current) => Math.max(0, current - 1))
           setDeleteStatus('idle')
           setDeleteTarget(null)
           return
@@ -431,26 +462,30 @@ export default function HistoryPage() {
               <AlertTriangle size={22} />
             </div>
             <p className="text-sm text-gray-500">{listError}</p>
-            <Button variant="outline" icon={<RotateCw size={16} />} onClick={loadList}>
+            <Button
+              variant="outline"
+              icon={<RotateCw size={16} />}
+              onClick={() => loadList(offset, debouncedSearchQuery)}
+            >
               Try Again
             </Button>
           </div>
         )}
 
-        {listStatus === 'success' && items.length === 0 && (
+        {listStatus === 'success' && items.length === 0 && !debouncedSearchQuery && (
           <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-10 text-center text-sm text-gray-500">
             Analysis history is coming soon.
           </div>
         )}
 
-        {listStatus === 'success' && items.length > 0 && filteredItems.length === 0 && (
+        {listStatus === 'success' && items.length === 0 && debouncedSearchQuery && (
           <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-10 text-center text-sm text-gray-500">
-            No preparations match "{searchQuery}".
+            No preparations match "{debouncedSearchQuery}".
           </div>
         )}
 
         {listStatus === 'success' &&
-          filteredItems.map((item) => {
+          items.map((item) => {
             const complete = isFullyComplete(item.checkpoints)
             return (
               <div key={item.id} className="rounded-2xl border border-gray-200 bg-white p-6">
@@ -499,6 +534,32 @@ export default function HistoryPage() {
               </div>
             )
           })}
+
+        {listStatus === 'success' && total > 0 && (
+          <div className="flex items-center justify-between gap-4 pt-2">
+            <p className="text-xs text-gray-400">
+              Showing {firstShownIndex}-{lastShownIndex} of {total}
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                icon={<ChevronLeft size={16} />}
+                disabled={!hasPreviousPage}
+                onClick={() => setOffset((current) => Math.max(0, current - HISTORY_PAGE_SIZE))}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                icon={<ChevronRight size={16} />}
+                disabled={!hasNextPage}
+                onClick={() => setOffset((current) => current + HISTORY_PAGE_SIZE)}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
       {continueTarget && (

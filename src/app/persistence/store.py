@@ -190,21 +190,39 @@ class PersistenceStore(Protocol):
         company: str | None = None,
         job_title: str | None = None,
         updated_after: datetime | None = None,
+        search: str | None = None,
         limit: int = 50,
+        offset: int = 0,
     ) -> list[JobPreparation]:
-        """Return `JobPreparation`s matching the given filters, newest-updated first.
+        """Return one page of `JobPreparation`s matching the given filters, newest-updated first.
 
-        Every filter is optional and exact-match (or, for `updated_after`,
-        a simple lower bound) on a plain column -- never a JSONB/full-text
-        search over `analysis_result`/`career_conversation`/`tailoring_plan`/
-        `post_apply_analysis` (see the Job Preparation Checkpoints design
-        review's explicit search-scope decision). `resume_id` filters via
-        `source_resume_version_id`'s owning resume, not a denormalized
-        column -- `job_preparations` has no `resume_id` column of its own.
-        Always ordered by `updated_at` descending; `limit` bounds the
-        result count (no cursor/offset pagination -- not yet needed by any
-        caller). Returns an empty list if nothing matches, matching this
-        store's existing "absence, not an exception" read convention.
+        `company`/`job_title`/`updated_after` are exact-match (or, for
+        `updated_after`, a simple lower bound) on a plain column -- never
+        a JSONB/full-text search over `analysis_result`/
+        `career_conversation`/`tailoring_plan`/`post_apply_analysis` (see
+        the Job Preparation Checkpoints design review's explicit
+        search-scope decision, which this still respects). `resume_id`
+        filters via `source_resume_version_id`'s owning resume, not a
+        denormalized column -- `job_preparations` has no `resume_id`
+        column of its own.
+
+        `search`, unlike the filters above, *is* a loose match -- a
+        case-insensitive substring check against `job_title`, `company`,
+        and the owning resume's `name` (whichever of the three contains
+        it), matching what History's search box has always searched
+        across (originally client-side; see `count_job_preparations` and
+        the History server-side pagination/search decision for why this
+        moved server-side). Still only plain-column/joined-column text,
+        never the JSONB payloads -- the search-scope decision above is
+        unchanged, just no longer confined to the frontend.
+
+        Always ordered by `updated_at` descending. `limit`/`offset` are
+        plain offset pagination -- `offset` skips that many matching rows
+        before `limit` bounds how many are returned; combine with
+        `count_job_preparations` (same filters, no `limit`/`offset`) for
+        total-count/page-metadata. Returns an empty list if nothing
+        matches (or `offset` is past the end), matching this store's
+        existing "absence, not an exception" read convention.
 
         Always excludes `include_in_history=False` (test-only) and
         soft-deleted (`deleted_at IS NOT NULL`) preparations -- this is
@@ -214,6 +232,26 @@ class PersistenceStore(Protocol):
         soft-deleted or test-only preparation, since both remain fully
         valid, addressable records -- only their appearance in this list
         is suppressed.
+        """
+        ...
+
+    async def count_job_preparations(
+        self,
+        *,
+        resume_id: UUID | None = None,
+        company: str | None = None,
+        job_title: str | None = None,
+        updated_after: datetime | None = None,
+        search: str | None = None,
+    ) -> int:
+        """Return how many `JobPreparation`s match the given filters -- same filters, semantics,
+        and exclusions as `list_job_preparations`, just a count instead of a page.
+
+        A separate method (not a value bundled onto `list_job_preparations`'s return) so a
+        caller that only needs the count never pays for fetching/deserializing rows, and a
+        caller that needs both (History's pagination) fetches them concurrently via
+        `asyncio.gather` -- two independent, cheap reads rather than one method whose return
+        shape only List-Job-Preparations callers so far have needed to change.
         """
         ...
 

@@ -53,7 +53,7 @@ async def test_list_returns_empty_when_nothing_exists(api_client_factory) -> Non
     response = await client.get("/v1/job-preparations")
 
     assert response.status_code == 200
-    assert response.json() == {"items": []}
+    assert response.json() == {"items": [], "total": 0, "limit": 50, "offset": 0}
 
 
 async def test_list_returns_a_lightweight_summary_without_jsonb_payloads(
@@ -153,6 +153,112 @@ async def test_list_supports_company_and_job_title_filters(api_client_factory) -
 
     ids = [item["id"] for item in response.json()["items"]]
     assert ids == [str(matching.id)]
+
+
+async def test_list_supports_case_insensitive_search_across_job_title_and_company(
+    api_client_factory,
+) -> None:
+    client, store = await api_client_factory()
+    matching = await start_job_preparation(
+        store,
+        resume_text="Resume A",
+        job_description="JD A",
+        analysis_result=_ANALYSIS,
+        company="Acme Corp",
+        job_title="Staff Backend Engineer",
+    )
+    also_matching = await start_job_preparation(
+        store,
+        resume_text="Resume B",
+        job_description="JD B",
+        analysis_result=_ANALYSIS,
+        company="Backend Solutions Inc",
+        job_title="Product Manager",
+    )
+    await start_job_preparation(
+        store,
+        resume_text="Resume C",
+        job_description="JD C",
+        analysis_result=_ANALYSIS,
+        company="Other Corp",
+        job_title="Frontend Engineer",
+    )
+
+    response = await client.get("/v1/job-preparations", params={"search": "BACKEND"})
+
+    ids = {item["id"] for item in response.json()["items"]}
+    assert ids == {str(matching.id), str(also_matching.id)}
+
+
+async def test_list_search_ignores_leading_trailing_whitespace(api_client_factory) -> None:
+    client, store = await api_client_factory()
+    matching = await start_job_preparation(
+        store,
+        resume_text="Resume A",
+        job_description="JD A",
+        analysis_result=_ANALYSIS,
+        job_title="Staff Engineer",
+    )
+
+    response = await client.get("/v1/job-preparations", params={"search": "  staff  "})
+
+    ids = [item["id"] for item in response.json()["items"]]
+    assert ids == [str(matching.id)]
+
+
+async def test_list_blank_search_behaves_like_no_search(api_client_factory) -> None:
+    client, store = await api_client_factory()
+    await start_job_preparation(
+        store, resume_text="Resume A", job_description="JD A", analysis_result=_ANALYSIS
+    )
+
+    response = await client.get("/v1/job-preparations", params={"search": "   "})
+
+    assert len(response.json()["items"]) == 1
+
+
+async def test_list_pagination_returns_the_requested_page_and_the_true_total(
+    api_client_factory,
+) -> None:
+    client, store = await api_client_factory()
+    created = []
+    for i in range(5):
+        jp = await start_job_preparation(
+            store,
+            resume_text=f"Resume {i}",
+            job_description=f"JD {i}",
+            analysis_result=_ANALYSIS,
+            job_title=f"Role {i}",
+        )
+        created.append(jp)
+    expected_order = list(reversed(created))  # newest-updated first
+
+    first_page = await client.get("/v1/job-preparations", params={"limit": 2, "offset": 0})
+    second_page = await client.get("/v1/job-preparations", params={"limit": 2, "offset": 2})
+
+    first_body = first_page.json()
+    assert [item["id"] for item in first_body["items"]] == [
+        str(jp.id) for jp in expected_order[0:2]
+    ]
+    # `total` reflects every matching preparation, not just this page's size.
+    assert first_body["total"] == 5
+    assert first_body["limit"] == 2
+    assert first_body["offset"] == 0
+
+    second_body = second_page.json()
+    assert [item["id"] for item in second_body["items"]] == [
+        str(jp.id) for jp in expected_order[2:4]
+    ]
+    assert second_body["total"] == 5
+    assert second_body["offset"] == 2
+
+
+async def test_list_rejects_a_negative_offset(api_client_factory) -> None:
+    client, _store = await api_client_factory()
+
+    response = await client.get("/v1/job-preparations", params={"offset": -1})
+
+    assert response.status_code == 422
 
 
 async def test_get_returns_404_for_an_unknown_id(api_client_factory) -> None:
@@ -283,7 +389,7 @@ async def test_list_excludes_a_preparation_with_include_in_history_false(
 
     response = await client.get("/v1/job-preparations")
 
-    assert response.json() == {"items": []}
+    assert response.json() == {"items": [], "total": 0, "limit": 50, "offset": 0}
 
 
 async def test_list_includes_a_normal_preparation_alongside_an_excluded_one(
@@ -337,7 +443,7 @@ async def test_delete_removes_a_preparation_from_the_list(api_client_factory) ->
 
     assert delete_response.status_code == 204
     list_response = await client.get("/v1/job-preparations")
-    assert list_response.json() == {"items": []}
+    assert list_response.json() == {"items": [], "total": 0, "limit": 50, "offset": 0}
 
 
 async def test_delete_does_not_remove_the_row_get_by_id_still_returns_it(
