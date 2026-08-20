@@ -320,6 +320,16 @@ export default function HistoryPage() {
     setDetail(null)
   }
 
+  // Clears both the live and debounced query immediately (rather than
+  // waiting `SEARCH_DEBOUNCE_MS` for the debounce effect to catch up) so
+  // the zero-results state exits right away -- this also drives the
+  // existing "reset to page 1 on search change" effect via
+  // `debouncedSearchQuery`.
+  function handleClearSearch() {
+    setSearchQuery('')
+    setDebouncedSearchQuery('')
+  }
+
   async function handleGenerateInterviewPreparation() {
     if (!selectedId) return
     setGenerationStatus('generating')
@@ -432,23 +442,26 @@ export default function HistoryPage() {
     <>
       <TopHeader title="History" subtitle="Past resume + job preparations" />
       <div className="mx-auto max-w-3xl space-y-4 p-8">
-        {listStatus === 'success' && items.length > 0 && (
-          <div className="relative">
-            <Search
-              size={16}
-              className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"
-              aria-hidden="true"
-            />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search by job title, company, or resume…"
-              aria-label="Search job preparations"
-              className="w-full rounded-full border border-gray-200 bg-white py-2.5 pl-10 pr-4 text-sm text-gray-800 placeholder:text-gray-400 focus:border-indigo-400 focus:outline-none"
-            />
-          </div>
-        )}
+        {/* Page-level control: rendered once, independent of the
+            results/empty/error branching below, so the user can always
+            edit or clear the query -- including from the zero-results
+            state, which previously had no way back without navigating
+            away. */}
+        <div className="relative">
+          <Search
+            size={16}
+            className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"
+            aria-hidden="true"
+          />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search by job title, company, or resume…"
+            aria-label="Search job preparations"
+            className="w-full rounded-full border border-gray-200 bg-white py-2.5 pl-10 pr-4 text-sm text-gray-800 placeholder:text-gray-400 focus:border-indigo-400 focus:outline-none"
+          />
+        </div>
 
         {listStatus === 'loading' && (
           <div className="rounded-2xl border border-gray-200 bg-white p-10 text-center text-sm text-gray-500">
@@ -480,7 +493,12 @@ export default function HistoryPage() {
 
         {listStatus === 'success' && items.length === 0 && debouncedSearchQuery && (
           <div className="rounded-2xl border border-dashed border-gray-300 bg-white p-10 text-center text-sm text-gray-500">
-            No preparations match "{debouncedSearchQuery}".
+            <p>No preparations match "{debouncedSearchQuery}".</p>
+            <div className="mt-4">
+              <Button variant="outline" onClick={handleClearSearch}>
+                Clear search
+              </Button>
+            </div>
           </div>
         )}
 

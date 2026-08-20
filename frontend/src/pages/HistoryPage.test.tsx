@@ -149,6 +149,8 @@ describe('HistoryPage', () => {
     await waitFor(() =>
       expect(screen.getByText(/analysis history is coming soon/i)).toBeInTheDocument(),
     )
+    expect(screen.queryByText(/no preparations match/i)).not.toBeInTheDocument()
+    expect(screen.getByLabelText(/search job preparations/i)).toBeInTheDocument()
   })
 
   it('renders each preparation with resume/job/company, last updated, and checkpoints', async () => {
@@ -468,6 +470,116 @@ describe('HistoryPage', () => {
     await waitFor(() =>
       expect(screen.getByText(/no preparations match "nonexistent role"/i)).toBeInTheDocument(),
     )
+  })
+
+  it('keeps the search input visible and populated when a search returns zero results', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
+
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([]))
+    fireEvent.change(screen.getByLabelText(/search job preparations/i), {
+      target: { value: 'ZS' },
+    })
+
+    await waitFor(() =>
+      expect(screen.getByText(/no preparations match "ZS"/i)).toBeInTheDocument(),
+    )
+    // The trapping bug: the input used to be gated on `items.length > 0`
+    // and vanished along with the results, leaving no way to edit or
+    // clear the query without navigating away.
+    const searchInput = screen.getByLabelText(/search job preparations/i) as HTMLInputElement
+    expect(searchInput).toBeInTheDocument()
+    expect(searchInput.value).toBe('ZS')
+  })
+
+  it('does not show pagination controls when a search returns zero results', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary], { total: 25 }))
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
+
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([], { total: 0 }))
+    fireEvent.change(screen.getByLabelText(/search job preparations/i), {
+      target: { value: 'ZS' },
+    })
+
+    await waitFor(() =>
+      expect(screen.getByText(/no preparations match "ZS"/i)).toBeInTheDocument(),
+    )
+    expect(screen.queryByRole('button', { name: /previous/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /next/i })).not.toBeInTheDocument()
+  })
+
+  it('can recover from a zero-result search by editing the query, without navigating away', async () => {
+    const other: JobPreparationSummary = {
+      ...fixtureSummary,
+      id: 'job-prep-2',
+      job_title: 'Product Manager',
+      company: 'Initech',
+      resume_name: 'PM Resume',
+    }
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([fixtureSummary]))
+
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Senior Engineer')).toBeInTheDocument())
+
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([]))
+    const searchInput = screen.getByLabelText(/search job preparations/i)
+    fireEvent.change(searchInput, { target: { value: 'ZS' } })
+    await waitFor(() =>
+      expect(screen.getByText(/no preparations match "ZS"/i)).toBeInTheDocument(),
+    )
+
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([other]))
+    fireEvent.change(searchInput, { target: { value: 'initech' } })
+
+    await waitFor(() =>
+      expect(mockedApi.listJobPreparations).toHaveBeenLastCalledWith({
+        limit: 10,
+        offset: 0,
+        search: 'initech',
+      }),
+    )
+    expect(screen.getByText('Product Manager')).toBeInTheDocument()
+    expect(screen.queryByText(/no preparations match/i)).not.toBeInTheDocument()
+  })
+
+  it('Clear search restores the unfiltered first page without navigating away', async () => {
+    mockedApi.listJobPreparations.mockResolvedValue(
+      listResult(Array.from({ length: 10 }, (_, i) => ({ ...fixtureSummary, id: `job-prep-page1-${i}` })), { total: 25, offset: 0 }),
+    )
+    renderPage()
+    await waitFor(() => expect(mockedApi.listJobPreparations).toHaveBeenCalledTimes(1))
+
+    mockedApi.listJobPreparations.mockResolvedValue(
+      listResult([fixtureSummary], { total: 25, offset: 10 }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /next/i }))
+    await waitFor(() =>
+      expect(mockedApi.listJobPreparations).toHaveBeenLastCalledWith({ limit: 10, offset: 10 }),
+    )
+
+    mockedApi.listJobPreparations.mockResolvedValue(listResult([]))
+    fireEvent.change(screen.getByLabelText(/search job preparations/i), {
+      target: { value: 'ZS' },
+    })
+    await waitFor(() =>
+      expect(screen.getByText(/no preparations match "ZS"/i)).toBeInTheDocument(),
+    )
+
+    mockedApi.listJobPreparations.mockResolvedValue(
+      listResult(Array.from({ length: 10 }, (_, i) => ({ ...fixtureSummary, id: `job-prep-page1-${i}` })), { total: 25, offset: 0 }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: /clear search/i }))
+
+    await waitFor(() =>
+      expect(mockedApi.listJobPreparations).toHaveBeenLastCalledWith({ limit: 10, offset: 0 }),
+    )
+    const searchInput = screen.getByLabelText(/search job preparations/i) as HTMLInputElement
+    expect(searchInput.value).toBe('')
+    await waitFor(() => expect(screen.getByText('Showing 1-10 of 25')).toBeInTheDocument())
   })
 
   it('shows pagination summary text and disables Previous on the first page', async () => {
