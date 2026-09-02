@@ -1,4 +1,42 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: resumepilot
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required - set it in .env}
+    volumes:
+      - resumepilot_pg_data:/var/lib/postgresql/data
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d resumepilot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  # One-off migration runner. Not part of `docker compose up` (see `profiles`
+  # below) so migrations are never applied silently on image build or on a
+  # plain `up` -- run explicitly with:
+  #   docker compose run --rm migrate
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: resumepilot-ai:local
+    env_file:
+      - .env
+    environment:
+      RESUMEPILOT_DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required - set it in .env}@postgres:5432/resumepilot
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+    profiles:
+      - tools
+
   api:
     build:
       context: .
@@ -11,6 +49,10 @@ services:
     environment:
       RESUMEPILOT_HOST: 0.0.0.0
       RESUMEPILOT_PORT: 8000
+      RESUMEPILOT_DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required - set it in .env}@postgres:5432/resumepilot
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/health')"]
       interval: 30s
@@ -18,3 +60,6 @@ services:
       retries: 3
       start_period: 5s
     restart: unless-stopped
+
+volumes:
+  resumepilot_pg_data:
