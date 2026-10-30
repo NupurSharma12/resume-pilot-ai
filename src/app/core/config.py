@@ -101,14 +101,22 @@ class Settings(BaseSettings):
         default_factory=lambda: [
             "google/gemma-4-26b-a4b-it:free",
             "google/gemma-4-31b-it:free",
-            "nvidia/nemotron-3-nano-30b-a3b:free",
-            "nvidia/nemotron-3-super-120b-a12b:free",
+            "xingchen-agi/xing4.0-29b-a4b:free",
+            "dots-studio/dots-3-note-preview:free",
         ],
         description=(
             "Ordered list of OpenRouter model identifiers to try, free models by default. "
             "Verified against https://openrouter.ai/api/v1/models as currently valid "
-            "':free'-suffixed ids on 2026-08-09 — the previous defaults (Qwen/Llama/DeepSeek "
-            "entries) had all lost their free tier by then and were 404ing on every call. "
+            "':free'-suffixed ids on 2026-10-28 — the previous defaults' last two entries "
+            "(nvidia/nemotron-3-nano-30b-a3b:free, nvidia/nemotron-3-super-120b-a12b:free) "
+            "had both dropped off the free-tier catalog by then and were 404ing on every "
+            "call (confirmed live in production logs); the replacements were chosen "
+            "because OpenRouter's own model metadata lists both 'response_format' and "
+            "'structured_outputs' in their supported_parameters (matching this gateway's "
+            "`response_format: json_object` request) and neither is reasoning-labeled, "
+            "same bar the original two Gemma entries already met. The previous-previous "
+            "defaults (Qwen/Llama/DeepSeek entries) had all lost their free tier before "
+            "that and were 404ing on every call. "
             "OpenRouterGateway attempts them in order on every call, falling back to the "
             "next one on a timeout, HTTP 429, HTTP 404, HTTP 5xx, an empty response, "
             "malformed JSON, or a schema-validation failure (see OpenRouterGateway's module "
