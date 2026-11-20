@@ -99,16 +99,38 @@ class Settings(BaseSettings):
     )
     openrouter_models: list[str] = Field(
         default_factory=lambda: [
+            "particle-ai/particle-1:free",
+            "nvidia/nemotron-3.5-super-vl:free",
             "google/gemma-4-26b-a4b-it:free",
             "google/gemma-4-31b-it:free",
-            "nvidia/nemotron-3-nano-30b-a3b:free",
-            "nvidia/nemotron-3-super-120b-a12b:free",
         ],
         description=(
             "Ordered list of OpenRouter model identifiers to try, free models by default. "
-            "Verified against https://openrouter.ai/api/v1/models as currently valid "
-            "':free'-suffixed ids on 2026-08-09 — the previous defaults (Qwen/Llama/DeepSeek "
-            "entries) had all lost their free tier by then and were 404ing on every call. "
+            "All four confirmed `pricing: {prompt: 0, completion: 0}` in "
+            "https://openrouter.ai/api/v1/models on 2026-11-20. "
+            "Ordering is by *verified schema adherence*, not catalog presence: "
+            "particle-1 and nemotron-3.5-super-vl are the only two free models that "
+            "actually returned a schema-valid ResumeAnalysisResult when probed with a "
+            "realistic resume+JD prompt through this gateway (~9s and ~19s respectively). "
+            "Listing a model is NOT evidence it works -- the free catalog churns fast and "
+            "several models that advertise 'response_format'/'structured_outputs' still "
+            "return well-formed JSON of an entirely different shape, which this gateway "
+            "correctly rejects as a ValidationError and retries past. Observed off-schema: "
+            "dots-studio/dots-3-note-preview:free (returns match_score/matching_skills) and "
+            "baidu/ernie-5.5-flash-preview:free (returns analysis_note). The two Gemma "
+            "entries are kept as third/fourth because they are capable but chronically "
+            "HTTP 429 rate-limited on the free tier -- they were 429ing in the production "
+            "incident that prompted this list's last revision, and still 429 on every probe "
+            "since, so they can no longer be relied on as the front of the list. "
+            "Expect low-quality (but structurally valid) analyses from these small free "
+            "models -- their value is keeping the openrouter leg alive so the chain does "
+            "not fall through to MockGateway, which returns all-zero scores. "
+            "Prior revisions for context: on 2026-10-28, "
+            "nvidia/nemotron-3-nano-30b-a3b:free and "
+            "nvidia/nemotron-3-super-120b-a12b:free were dropped after both 404ed in "
+            "production; their replacement xingchen-agi/xing4.0-29b-a4b:free was itself "
+            "retired from the free catalog within three weeks, before ever shipping. "
+            "Before that, the Qwen/Llama/DeepSeek defaults had all lost their free tier. "
             "OpenRouterGateway attempts them in order on every call, falling back to the "
             "next one on a timeout, HTTP 429, HTTP 404, HTTP 5xx, an empty response, "
             "malformed JSON, or a schema-validation failure (see OpenRouterGateway's module "
