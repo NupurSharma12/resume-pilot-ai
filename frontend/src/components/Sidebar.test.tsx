@@ -124,3 +124,49 @@ describe('Sidebar candidate score', () => {
     expect(screen.getByText(/updated after tailoring/i)).toBeInTheDocument()
   })
 })
+
+describe('Sidebar candidate identity', () => {
+  it('renders the employer and experience extracted from the resume', () => {
+    renderSidebar({
+      ...fixtureResumeAnalysis,
+      candidate_profile: {
+        name: 'Ada Lovelace',
+        current_company: 'Analytical Engines Ltd',
+        title: 'Principal Engineer',
+        years_experience: 12,
+      },
+    })
+
+    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument()
+    expect(screen.getByText('AL')).toBeInTheDocument()
+    expect(screen.getByText('Analytical Engines Ltd')).toBeInTheDocument()
+    expect(screen.getByText('12 yrs')).toBeInTheDocument()
+  })
+
+  it('drops the separator when only one of employer/experience was extracted', () => {
+    renderSidebar({
+      ...fixtureResumeAnalysis,
+      candidate_profile: {
+        name: 'Prince',
+        current_company: 'Paisley Park',
+        title: null,
+        years_experience: null,
+      },
+    })
+
+    expect(screen.getByText('Paisley Park')).toBeInTheDocument()
+    expect(screen.queryByText(/yrs/)).not.toBeInTheDocument()
+    expect(screen.queryByText('·')).not.toBeInTheDocument()
+  })
+
+  it('shows a neutral unavailable state, and no fabricated identity, for a historical analysis', () => {
+    // No `candidate_profile` -- the shape of every pre-feature record.
+    renderSidebar(fixtureResumeAnalysis)
+
+    expect(screen.getByText(/candidate details not available/i)).toBeInTheDocument()
+    expect(screen.queryByText('Nupur Sharma')).not.toBeInTheDocument()
+    expect(screen.queryByText('NS')).not.toBeInTheDocument()
+    // The score half of the card still renders -- it never depended on identity.
+    expect(screen.getByText('Overall Match')).toBeInTheDocument()
+  })
+})

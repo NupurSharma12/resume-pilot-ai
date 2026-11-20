@@ -11,7 +11,8 @@ import AnalysisErrorState from '../components/AnalysisErrorState'
 import CareerConversationBanner from '../components/CareerConversationBanner'
 import TailoredResumeBanner from '../components/TailoredResumeBanner'
 import { getThemeForIndex } from '../data/theme'
-import { candidate, skillMatchNarratives, defaultSkillMatchNarrative } from '../data/mockData'
+import { skillMatchNarratives, defaultSkillMatchNarrative } from '../data/mockData'
+import { toCandidate } from '../data/candidate'
 import { buildExecutiveSummary, deriveTopStrengths, deriveTopRisks } from '../lib/insights'
 import { analyzeResume, ApiError } from '../lib/api'
 import { useResumeSession } from '../session/ResumeSessionContext'
@@ -169,7 +170,7 @@ export default function DashboardPage() {
         {hasResult && resumeAnalysis && (
           <div ref={resultsRef} className="animate-panel-fade space-y-8">
             <CandidateHeroCard
-              candidate={candidate}
+              candidate={toCandidate(resumeAnalysis)}
               overallAssessment={displayedOverallAssessment ?? resumeAnalysis.overall_assessment}
               skillMatches={resumeAnalysis.skill_matches}
               executiveSummary={executiveSummary}

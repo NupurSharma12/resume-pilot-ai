@@ -10,6 +10,40 @@ instances of these models.
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class CandidateProfile(BaseModel):
+    """Identity details extracted from the resume itself.
+
+    Distinct from the rest of this module: every other model here describes
+    the *fit* between a resume and a job description, whereas this is a
+    plain read of who the resume belongs to. It lives on
+    `ResumeAnalysisResult` anyway because the analysis call is the only
+    point where the full resume text is already in front of a model --
+    extracting it here costs nothing extra, versus a second call purely to
+    re-read the header.
+
+    Only `name` is required. The rest are genuinely optional: plenty of
+    resumes omit a current employer, state no title, or give no basis for
+    a total-years figure, and inventing one is worse than leaving it unset
+    (see `toCandidate` on the frontend, which renders a neutral
+    "unavailable" state rather than a placeholder).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(description="The candidate's full name as it appears on the resume.")
+    current_company: str | None = Field(
+        default=None, description="Most recent employer. Null if not stated."
+    )
+    title: str | None = Field(
+        default=None, description="Most recent job title. Null if not stated."
+    )
+    years_experience: int | None = Field(
+        default=None,
+        ge=0,
+        description="Total years of professional experience. Null if not derivable.",
+    )
+
+
 class HiringRecommendation(BaseModel):
     """A hiring decision and the reasoning behind it."""
 
@@ -79,6 +113,18 @@ class ResumeAnalysisResult(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    # `default=None` is load-bearing, not stylistic: every analysis
+    # persisted before this field existed is stored verbatim as JSONB
+    # (`job_preparations.analysis_result`) and is re-validated through this
+    # model on every History read. Combined with `extra="forbid"` above,
+    # making this required would turn every pre-existing record into a
+    # ValidationError -- i.e. History would break for all historical data,
+    # with no migration able to recover a name nobody extracted at the
+    # time. New analyses populate it; old ones stay None forever.
+    candidate_profile: CandidateProfile | None = Field(
+        default=None,
+        description="Identity details extracted from the resume.",
+    )
     overall_assessment: OverallAssessment = Field(
         description="The top-level summary of the resume's fit for the job description."
     )

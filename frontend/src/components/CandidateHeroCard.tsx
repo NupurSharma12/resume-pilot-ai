@@ -1,13 +1,17 @@
 import { Building2, CheckCircle2 } from 'lucide-react'
 import CircularProgress from './CircularProgress'
-import StarRating from './StarRating'
 import CategoryScoreRow from './CategoryScoreRow'
 import ExecutiveSummary from './ExecutiveSummary'
 import { getThemeForIndex } from '../data/theme'
 import type { Candidate, OverallAssessment, SkillMatch } from '../data/types'
 
 interface CandidateHeroCardProps {
-  candidate: Candidate
+  // Null when the analysis carries no extracted identity -- every analysis
+  // created before `candidate_profile` existed. The identity block is
+  // replaced by a short explanatory line in that case; the score and skill
+  // breakdown either side of it are unaffected, since they never depended
+  // on identity.
+  candidate: Candidate | null
   overallAssessment: OverallAssessment
   skillMatches: SkillMatch[]
   executiveSummary: string[]
@@ -38,21 +42,37 @@ export default function CandidateHeroCard({
       </div>
 
       <div className="border-l border-gray-200 p-8">
-        <div className="flex items-center gap-3">
-          <StarRating rating={candidate.rating} />
-          <span className="text-sm font-medium text-gray-400">
-            {candidate.rating}/5
-          </span>
-          <span className="text-sm text-gray-400">|</span>
-          <span className="text-sm text-gray-500">{candidate.title}</span>
-        </div>
+        {candidate ? (
+          <>
+            {candidate.title && (
+              <p className="text-sm text-gray-500">{candidate.title}</p>
+            )}
 
-        <h2 className="mt-3 text-2xl font-bold text-gray-900">{candidate.name}</h2>
+            <h2 className="mt-1.5 text-2xl font-bold text-gray-900">{candidate.name}</h2>
 
-        <p className="mt-1.5 flex items-center gap-1.5 text-sm text-gray-500">
-          <Building2 size={14} />
-          {candidate.company} · {candidate.yearsExperience} Years Experience
-        </p>
+            {/* Rendered only when there's something real to show: a lone
+                "·" separator or a bare "Years Experience" with no number
+                reads as a rendering bug, so the details line is assembled
+                from whichever parts were actually extracted. */}
+            {(candidate.company || candidate.yearsExperience !== null) && (
+              <p className="mt-1.5 flex items-center gap-1.5 text-sm text-gray-500">
+                <Building2 size={14} />
+                {[
+                  candidate.company,
+                  candidate.yearsExperience !== null
+                    ? `${candidate.yearsExperience} Years Experience`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="text-sm text-gray-400">
+            Candidate details are not available for this analysis.
+          </p>
+        )}
 
         <ExecutiveSummary bullets={executiveSummary} />
       </div>
