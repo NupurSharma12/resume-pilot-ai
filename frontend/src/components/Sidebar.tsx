@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import { Link, useLocation } from 'react-router-dom'
 import CandidateSummaryCard from './CandidateSummaryCard'
-import { candidate } from '../data/mockData'
+import { toCandidate } from '../data/candidate'
 import type { ResumeAnalysisResult } from '../data/types'
 import type { ResumeAnalysisComparison } from '../data/postApplyTypes'
 
@@ -104,7 +104,7 @@ export default function Sidebar({ resumeAnalysis, postApplyComparison }: Sidebar
       {resumeAnalysis && (
         <div className="mt-auto p-4">
           <CandidateSummaryCard
-            candidate={candidate}
+            candidate={toCandidate(resumeAnalysis)}
             overallScore={
               postApplyComparison?.score_after ?? resumeAnalysis.overall_assessment.overall_score
             }

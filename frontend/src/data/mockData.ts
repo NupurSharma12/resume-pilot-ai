@@ -1,16 +1,12 @@
-import type { Candidate, SkillMatchNarrative } from './types'
+import type { SkillMatchNarrative } from './types'
 
-// Identity/profile fields only — everything analysis-related (score,
-// recommendation, fit summary) comes from the real ResumeAnalysisResult
-// returned by the backend, not from mock data.
-export const candidate: Candidate = {
-  name: 'Nupur Sharma',
-  initials: 'NS',
-  title: 'Senior Product Manager',
-  company: 'Adobe',
-  yearsExperience: 13,
-  rating: 4.5,
-}
+// The hardcoded `candidate` that used to live here has been removed: it
+// rendered the same name, title, employer and years of experience for
+// every uploaded resume, which is indistinguishable on screen from
+// correctly extracted data. Identity now comes from the backend's
+// `candidate_profile` via `toCandidate` (data/candidate.ts), and analyses
+// that carry none render an explicit "not available" state instead of a
+// stand-in person.
 
 // The backend's SkillMatch only ever carries category/score/matched_skills/
 // missing_skills — no narrative text. `aiSummary`/`recommendation` (shown in

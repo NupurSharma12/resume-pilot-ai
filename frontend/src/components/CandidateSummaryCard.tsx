@@ -3,7 +3,11 @@ import { getMatchLabel } from '../lib/scoreDescriptor'
 import type { Candidate } from '../data/types'
 
 interface CandidateSummaryCardProps {
-  candidate: Candidate
+  // Null for analyses with no extracted identity (everything created
+  // before `candidate_profile` existed). The score section below still
+  // renders -- it never depended on identity -- so the card stays useful
+  // rather than disappearing.
+  candidate: Candidate | null
   overallScore: number
   // True once a Post-Apply Analysis Loop re-analysis has actually
   // completed (see docs/features/postapply-analysis-loop.md) -- `Sidebar`
@@ -27,25 +31,38 @@ export default function CandidateSummaryCard({
         CURRENT CANDIDATE
       </p>
 
-      <div className="flex items-center gap-3">
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 text-sm font-bold text-white">
-          {candidate.initials}
-        </div>
-        <div className="min-w-0">
-          <p className="truncate font-semibold text-gray-900">{candidate.name}</p>
-          <div className="flex items-center gap-2 text-xs text-gray-500">
-            <span className="flex items-center gap-1">
-              <Building2 size={12} />
-              {candidate.company}
-            </span>
-            <span aria-hidden>·</span>
-            <span className="flex items-center gap-1">
-              <CalendarDays size={12} />
-              {candidate.yearsExperience} yrs
-            </span>
+      {candidate ? (
+        <div className="flex items-center gap-3">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 text-sm font-bold text-white">
+            {candidate.initials}
+          </div>
+          <div className="min-w-0">
+            <p className="truncate font-semibold text-gray-900">{candidate.name}</p>
+            {/* Each detail is conditional, and the separator only renders
+                when there are two details to separate -- otherwise a
+                resume stating just an employer shows a trailing "·". */}
+            <div className="flex items-center gap-2 text-xs text-gray-500">
+              {candidate.company && (
+                <span className="flex items-center gap-1">
+                  <Building2 size={12} />
+                  {candidate.company}
+                </span>
+              )}
+              {candidate.company && candidate.yearsExperience !== null && (
+                <span aria-hidden>·</span>
+              )}
+              {candidate.yearsExperience !== null && (
+                <span className="flex items-center gap-1">
+                  <CalendarDays size={12} />
+                  {candidate.yearsExperience} yrs
+                </span>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        <p className="text-xs text-gray-400">Candidate details not available</p>
+      )}
 
       <div className="mt-4 flex items-center justify-between text-sm">
         <span className="text-gray-500">Overall Match</span>

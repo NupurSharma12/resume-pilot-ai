@@ -196,3 +196,67 @@ describe('DashboardPage score consistency', () => {
     ).toBeInTheDocument()
   })
 })
+
+describe('DashboardPage candidate identity', () => {
+  // The hero card only renders once an analysis has succeeded, so every
+  // case here drives the same success state and varies only the
+  // extracted `candidate_profile`.
+  function renderWithProfile(profile: typeof fixtureResumeAnalysis.candidate_profile) {
+    mockedUseResumeSession.mockReturnValue(makeResumeSessionValue())
+    return renderPage({
+      resumeAnalysis: { ...fixtureResumeAnalysis, candidate_profile: profile },
+      status: 'success',
+    })
+  }
+
+  it('renders the name, title and employer extracted from the resume', () => {
+    renderWithProfile({
+      name: 'Ada Lovelace',
+      current_company: 'Analytical Engines Ltd',
+      title: 'Principal Engineer',
+      years_experience: 12,
+    })
+
+    expect(screen.getByRole('heading', { name: 'Ada Lovelace' })).toBeInTheDocument()
+    expect(screen.getByText('Principal Engineer')).toBeInTheDocument()
+    expect(screen.getByText(/Analytical Engines Ltd · 12 Years Experience/)).toBeInTheDocument()
+  })
+
+  it('omits the details line entirely when neither employer nor experience was extracted', () => {
+    renderWithProfile({
+      name: 'Prince',
+      current_company: null,
+      title: null,
+      years_experience: null,
+    })
+
+    expect(screen.getByRole('heading', { name: 'Prince' })).toBeInTheDocument()
+    // No stray separator or orphaned "Years Experience" label.
+    expect(screen.queryByText(/Years Experience/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/·/)).not.toBeInTheDocument()
+  })
+
+  it('shows a neutral unavailable state, never a fabricated identity, for a historical analysis', () => {
+    // `fixtureResumeAnalysis` has no `candidate_profile` -- exactly the
+    // shape of every record persisted before the field existed.
+    renderWithProfile(undefined)
+
+    expect(screen.getByText(/candidate details are not available/i)).toBeInTheDocument()
+    // The previously hardcoded placeholder identity must not reappear.
+    expect(screen.queryByText('Nupur Sharma')).not.toBeInTheDocument()
+    expect(screen.queryByText('Senior Product Manager')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Adobe/)).not.toBeInTheDocument()
+  })
+
+  it('never renders a star rating, which the application does not compute', () => {
+    renderWithProfile({
+      name: 'Ada Lovelace',
+      current_company: 'Analytical Engines Ltd',
+      title: 'Principal Engineer',
+      years_experience: 12,
+    })
+
+    // The old placeholder rendered a literal "4.5/5" next to filled stars.
+    expect(screen.queryByText(/\d(\.\d)?\/5/)).not.toBeInTheDocument()
+  })
+})
