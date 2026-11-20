@@ -46,7 +46,10 @@ from app.persistence.errors import JobPreparationCompletedError, JobPreparationN
 from app.persistence.store import PersistenceStore
 from app.prompts.career_conversation_prompt_builder import CareerConversationPromptBuilder
 from app.sessions.conversation_session import ConversationSession, ConversationSessionStore
-from app.workflows.career_conversation_workflow import CareerConversationWorkflow
+from app.workflows.career_conversation_workflow import (
+    CareerConversationWorkflow,
+    ConversationTurnInconsistentError,
+)
 
 logger = get_logger(__name__)
 
@@ -324,6 +327,30 @@ async def submit_career_conversation_answer(
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+            # A `ConversationTurnInconsistentError` means the model
+            # returned a turn that broke the should_stop/question
+            # invariant on every attempt the workflow allows -- an
+            # upstream quality failure, not a bug in this request. Left
+            # to propagate it surfaced as a bare 500 (observed twice in
+            # production), which the frontend reports as "Could not reach
+            # the conversation service. Is the backend running?" -- a
+            # misdiagnosis that sends users looking at a backend that is
+            # healthy and answering.
+            #
+            # 503 is the honest code: the session is untouched (this runs
+            # before `store.save`, and `submit_answer` does not mutate
+            # the session on this path), so the same answer can simply be
+            # submitted again. Every other exception keeps propagating
+            # exactly as before -- this narrows one known failure mode,
+            # it does not become a catch-all.
+            if isinstance(exc, ConversationTurnInconsistentError):
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "The conversation service could not produce a valid next question. "
+                        "Please submit your answer again."
+                    ),
+                ) from exc
             raise
         store.save(session)
         # Boundary D (durable history): a no-op unless this turn actually

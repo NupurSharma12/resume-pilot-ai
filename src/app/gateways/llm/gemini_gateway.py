@@ -33,6 +33,26 @@ logger = get_logger(__name__)
 # way against any provider, so those stay permanent.
 _RETRYABLE_CLIENT_STATUS_CODES = {408, 429}
 
+# Per-request ceiling for the Gemini client, in milliseconds
+# (`HttpOptions.timeout` is specified in ms, unlike OpenRouterGateway's
+# `_TIMEOUT_SECONDS`).
+#
+# `genai.Client` applies no timeout of its own, which made this -- the
+# *primary* provider -- the only unbounded leg of the chain, and let a
+# single hung structured call run 616s in production while the user sat
+# on a spinner. Tripping it raises `httpx.ReadTimeout`, which
+# `_classify_exception` above already maps to `TransientGatewayError`,
+# so the chain falls back to the next provider through machinery that
+# already exists; nothing new handles this error.
+#
+# Deliberately NOT OpenRouter's 30s. Measured against 30 real structured
+# calls, healthy durations ran 9s-119s (median ~30s) with only two
+# outliers beyond that (188s, 616s). A 30s ceiling would abort ~43% of
+# calls that go on to succeed; 120s sits above every healthy call
+# observed and cuts exactly the two pathological ones, so it fires only
+# on a genuinely stuck request rather than a merely slow one.
+_TIMEOUT_MS = 120_000
+
 
 def _classify_exception(exc: Exception) -> GatewayError:
     """Classify a raw exception from a Gemini network call as transient or permanent.
@@ -121,7 +141,10 @@ class GeminiGateway(LLMGateway):
                 "(set RESUMEPILOT_GEMINI_API_KEY, or remove 'gemini' from the provider chain)."
             )
         self._model = settings.gemini_model
-        self._client = genai.Client(api_key=settings.gemini_api_key)
+        self._client = genai.Client(
+            api_key=settings.gemini_api_key,
+            http_options=types.HttpOptions(timeout=_TIMEOUT_MS),
+        )
 
     @property
     def provider_name(self) -> str:

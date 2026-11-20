@@ -85,3 +85,33 @@ def test_construction_succeeds_with_api_key() -> None:
     assert gateway.provider_name == "gemini"
     assert gateway.supports_structured_output is True
     assert gateway.supports_json_schema is True
+
+
+def test_client_is_constructed_with_a_request_timeout() -> None:
+    """Gemini must not be the one unbounded leg of the provider chain.
+
+    `genai.Client` applies no timeout by default, which let a single hung
+    structured call run 616s in production while the user waited. The
+    value is asserted against `_TIMEOUT_MS` rather than a literal, so
+    retuning the ceiling against fresh latency data doesn't require
+    editing this test -- what matters here is that a timeout is
+    configured at all, and in the units the SDK expects (milliseconds).
+    """
+    from app.gateways.llm.gemini_gateway import _TIMEOUT_MS
+
+    gateway = GeminiGateway(Settings(gemini_api_key="test-gemini-api-key"))
+
+    assert gateway._client._api_client._http_options.timeout == _TIMEOUT_MS
+
+
+def test_configured_timeout_is_above_observed_healthy_latency() -> None:
+    """Guards the ceiling against being lowered to a value that aborts working calls.
+
+    Measured against 30 real structured calls, healthy durations reached
+    119s; OpenRouter's 30s ceiling would have aborted ~43% of calls that
+    went on to succeed. This pins the reasoning so a future "make it
+    consistent with OpenRouter" change has to confront it deliberately.
+    """
+    from app.gateways.llm.gemini_gateway import _TIMEOUT_MS
+
+    assert _TIMEOUT_MS >= 120_000

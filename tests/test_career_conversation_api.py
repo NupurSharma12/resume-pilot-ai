@@ -318,3 +318,99 @@ async def test_internal_turn_failure_leaves_session_recoverable_not_corrupted(
     assert retry_body["history"][0]["answer"] == "I used React for the internal dashboard."
     assert retry_body["status"] == "in_progress"
     assert retry_body["current_question"] is not None
+
+
+def _invalid_continue_decision() -> ConversationTurnDecision:
+    """A decision that passes schema validation but breaks the workflow's contract.
+
+    `should_stop=False` with `question=None` -- exactly the shape observed
+    in production (`should_stop is false but required field(s) are null:
+    question.`). The schema cannot forbid this, because `question` must
+    stay nullable for the `should_stop=True` case, so only the workflow's
+    cross-field check catches it.
+    """
+    return ConversationTurnDecision(
+        confidence=40,
+        should_stop=False,
+        topic="Frontend framework experience",
+        evidence_goal="Determine whether internal tooling work used React.",
+        estimated_impact=EstimatedImpact.HIGH,
+        question=None,
+    )
+
+
+async def test_answer_returns_503_not_500_when_every_decision_is_inconsistent(
+    api_client_factory,
+) -> None:
+    """The production failure: two bad decisions in a row must not surface as a 500.
+
+    A bare 500 is reported by the frontend as "Could not reach the
+    conversation service. Is the backend running?", which points users at
+    a backend that is healthy and answering. 503 keeps the failure
+    honest and tells them to retry.
+    """
+    # One good decision to open the session, then MAX_DECISION_ATTEMPTS
+    # bad ones so every attempt this turn violates the invariant.
+    client = await api_client_factory(
+        [
+            _continue_decision(confidence=30),
+            _invalid_continue_decision(),
+            _invalid_continue_decision(),
+        ]
+    )
+    start_response = await client.post("/v1/career-conversation", json=_START_PAYLOAD)
+    session_id = start_response.json()["session_id"]
+
+    response = await client.post(
+        f"/v1/career-conversation/{session_id}/answer",
+        json={"answer": "I used React on an internal admin tool."},
+    )
+
+    assert response.status_code == 503
+    assert "again" in response.json()["detail"].lower()
+
+
+async def test_answer_remains_retryable_after_an_inconsistent_decision(
+    api_client_factory,
+) -> None:
+    """The 503 must leave the session exactly as it was, so the same answer can be resubmitted.
+
+    This is what makes "Please submit your answer again" true rather than
+    just reassuring: `_request_decision` never mutates the session, and
+    `record_answer` only runs after it succeeds, so a failed turn leaves
+    no half-committed answer behind.
+    """
+    client = await api_client_factory(
+        [
+            _continue_decision(confidence=30),
+            _invalid_continue_decision(),
+            _invalid_continue_decision(),
+            # The retry the user makes after seeing the 503.
+            _continue_decision(confidence=50),
+        ]
+    )
+    start_response = await client.post("/v1/career-conversation", json=_START_PAYLOAD)
+    session_id = start_response.json()["session_id"]
+    question_before = start_response.json()["current_question"]
+
+    failed = await client.post(
+        f"/v1/career-conversation/{session_id}/answer",
+        json={"answer": "I used React on an internal admin tool."},
+    )
+    assert failed.status_code == 503
+
+    # The session still holds the same open question, and no answer was
+    # recorded -- a 409 here would mean the failed turn had mutated it.
+    state = await client.get(f"/v1/career-conversation/{session_id}")
+    assert state.status_code == 200
+    assert state.json()["current_question"] == question_before
+    assert state.json()["history"] == []
+    assert state.json()["status"] == "in_progress"
+
+    # Resubmitting the identical answer now succeeds.
+    retried = await client.post(
+        f"/v1/career-conversation/{session_id}/answer",
+        json={"answer": "I used React on an internal admin tool."},
+    )
+    assert retried.status_code == 200
+    assert len(retried.json()["history"]) == 1
